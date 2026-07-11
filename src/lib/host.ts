@@ -38,17 +38,31 @@ let btnEl: HTMLElement | null = null;
 const DOWNLOAD_BTN_ID = 'bilibili-helper-download-btn';
 
 /**
- * Inject a download button into the Bilibili toolbar (next to the share button).
+ * Remove the old floating bottom bar if it still exists from a previous version.
+ */
+function cleanupOldHost(): void {
+	const old = document.getElementById('bilibili-helper-host');
+	if (old) {
+		old.remove();
+		logInfo(MODULE, 'removed old floating host bar');
+	}
+}
+
+/**
+ * Inject a download button into the page toolbar after the share button.
  * Creates the popup panel lazily on first click.
  */
 function ensureButton(): HTMLElement {
 	if (btnEl) return btnEl;
 
-	// Find the toolbar area — the share button lives inside .video-toolbar-left
-	const toolbar = document.querySelector('.video-toolbar-left');
-	if (!toolbar) {
-		logWarn(MODULE, 'toolbar not found, cannot inject button');
-		// Fallback: create a fixed button
+	// Nuke the old floating bar
+	cleanupOldHost();
+
+	// Find the share button wrapper — insert after it
+	const shareWrap = document.querySelector('.toolbar-left-item-wrap .video-share-wrap');
+	if (!shareWrap) {
+		logWarn(MODULE, 'share button not found, using fallback popup position');
+		// Fallback: create a fixed floating button
 		btnEl = document.createElement('div');
 		btnEl.id = DOWNLOAD_BTN_ID;
 		btnEl.textContent = '下载';
@@ -56,7 +70,7 @@ function ensureButton(): HTMLElement {
 			position: 'fixed',
 			bottom: '20px',
 			right: '20px',
-			zIndex: '99999',
+			zIndex: '999999',
 			background: '#f45a8d',
 			color: '#fff',
 			padding: '10px 20px',
@@ -71,26 +85,28 @@ function ensureButton(): HTMLElement {
 		return btnEl;
 	}
 
-	// Insert a download button as the first item in the toolbar
+	// Insert download button right after the share button's parent toolbar-left-item-wrap
+	const shareItem = shareWrap.closest('.toolbar-left-item-wrap');
+	if (!shareItem || !shareItem.parentNode) {
+		logWarn(MODULE, 'share item parent not found');
+		return btnEl!;
+	}
+
 	btnEl = document.createElement('div');
 	btnEl.id = DOWNLOAD_BTN_ID;
-	btnEl.style.cssText = `
-		display: inline-flex;
-		align-items: center;
-		cursor: pointer;
-		margin-right: 12px;
-		color: var(--text1, #18191C);
-		font-size: 13px;
-	`;
+	btnEl.className = 'toolbar-left-item-wrap';
+	btnEl.style.cssText = 'display:inline-flex;align-items:center;cursor:pointer;';
 	btnEl.innerHTML = `
-		<svg width="22" height="22" viewBox="0 0 24 24" fill="none" style="margin-right:4px">
-			<path d="M5 20h14v-2H5v2zm7-18L5.33 9h3.84v4h3.66V9h3.84L12 2z" fill="currentColor"/>
-		</svg>
-		<span>下载</span>
+		<div class="video-toolbar-left-item" style="display:flex;flex-direction:column;align-items:center;gap:2px;color:var(--text1,#18191C);font-size:12px">
+			<svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+				<path d="M5 20h14v-2H5v2zm7-18L5.33 9h3.84v4h3.66V9h3.84L12 2z" fill="currentColor"/>
+			</svg>
+			<span>下载</span>
+		</div>
 	`;
 	btnEl.addEventListener('click', togglePopup);
-	toolbar.insertBefore(btnEl, toolbar.firstChild);
-	logInfo(MODULE, 'download button injected into toolbar');
+	shareItem.parentNode.insertBefore(btnEl, shareItem.nextSibling);
+	logInfo(MODULE, 'download button injected after share button');
 	return btnEl;
 }
 
