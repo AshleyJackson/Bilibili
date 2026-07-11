@@ -1,0 +1,20 @@
+{
+	"compilerOptions": {
+		"allowJs": true,
+		"checkJs": true,
+		"esModuleInterop": true,
+		"forceConsistentCasingInFileNames": true,
+		"resolveJsonModule": true,
+		"skipLibCheck": true,
+		"sourceMap": false,
+		"strict": true,
+		"moduleResolution": "bundler",
+		"module": "esnext",
+		"target": "esnext",
+		"types": ["node", "chrome"],
+		"paths": {
+			"$lib/*": ["./src/lib/*"]
+		}
+	},
+	"include": ["src/content-script/**/*.ts", "src/lib/**/*.ts"]
+}

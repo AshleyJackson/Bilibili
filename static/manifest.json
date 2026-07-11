@@ -1,14 +1,49 @@
 {
-	"name": "sveltekit-extension-template",
-	"description": "Example Chrome extension built with Sveltekit and Skeleton",
-	"version": "0.0.1",
-	"manifest_version": 3,
-	"icons": {
-		"32": "favicon.png"
-	},
-	"action": {
-		"default_popup": "index.html",
-		"default_icon": "favicon.png",
-		"default_title": "sveltekit-extension-template"
-	}
+  "name": "bilibili哔哩哔哩下载助手",
+  "version": "3.1.0",
+  "description": "bilibili 哔哩哔哩 B站 下载助手 帮你下载版权受限（能看不能缓存）的 番剧 电影 影视 电视剧 等 视频",
+  "content_scripts": [
+    {
+      "js": [
+        "bilibili-helper-content-script-seed.js"
+      ],
+      "matches": [
+        "http://*.bilibili.com/*",
+        "https://*.bilibili.com/*"
+      ],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+  "action": {
+    "default_title": "B站下载助手",
+    "default_popup": "index.html"
+  },
+  "offline_enabled": true,
+  "manifest_version": 3,
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "*.js",
+        "*.css",
+        "*.png",
+        "*.webp",
+        "*.json",
+        "*.html",
+        "*.wasm"
+      ],
+      "matches": [
+        "http://*.bilibili.com/*",
+        "https://*.bilibili.com/*"
+      ]
+    }
+  ]
 }

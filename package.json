@@ -4,7 +4,9 @@
 	"private": true,
 	"scripts": {
 		"dev": "vite dev",
-		"build": "vite build",
+		"build:content": "svelte-kit sync && vite build --config vite.content.config.ts --mode seed && vite build --config vite.content.config.ts --mode main",
+		"build": "vite build && cp node_modules/@ffmpeg/core/dist/umd/ffmpeg-core.{js,wasm} build/",
+		"build:all": "bun run build:content && bun run build",
 		"preview": "vite preview",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
@@ -32,6 +34,7 @@
 		"eslint-config-prettier": "^10.1.8",
 		"eslint-plugin-svelte": "^3.20.0",
 		"highlight.js": "^11.11.1",
+		"jsdom": "^29.1.1",
 		"prettier": "^3.9.5",
 		"prettier-plugin-svelte": "^4.1.1",
 		"svelte": "^5.56.4",
@@ -45,7 +48,11 @@
 	},
 	"type": "module",
 	"dependencies": {
+		"@ffmpeg/core": "^0.12.10",
+		"@ffmpeg/ffmpeg": "^0.12.15",
+		"@o7/icon": "^0.3.94",
 		"@types/node": "^26.1.1",
+		"js-md5": "^0.8.3",
 		"zod": "^4.4.3"
 	}
 }

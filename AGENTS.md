@@ -4,7 +4,7 @@ This file is for AI coding agents (Claude, Copilot, Cursor, etc.) working with t
 
 ## Overview
 
-This is a **SvelteKit Chrome Extension template** using Svelte 5, Skeleton 3, Tailwind 4, and Vite. It builds into a static Chrome extension via `sveltekit-adapter-chrome-extension`.
+This is a **SvelteKit Chrome Extension** that downloads videos from bilibili.com. It uses Svelte 5, Skeleton 3, Tailwind 4, and Vite, and builds into a static Chrome extension via `sveltekit-adapter-chrome-extension`. The download logic runs in Bilibili's page context via a two-stage content script (seed + main).
 
 ## Project Structure
 
@@ -13,18 +13,31 @@ This is a **SvelteKit Chrome Extension template** using Svelte 5, Skeleton 3, Ta
 | `src/routes/` | SvelteKit pages (built as extension pages) |
 | `src/app.html` | Root HTML shell |
 | `src/app.css` | Global styles + Tailwind entry |
-| `static/` | Static assets (icons, `manifest.json`) |
+| `src/content-script/seed.ts` | MV3 isolated-world content script — injects `main.ts` into the page |
+| `src/content-script/main.ts` | Page-world logic: XHR interception, `__INITIAL_STATE__`/`__PLAYURL_HYDRATE_DATA__` parsing, playurl fetch, UI render |
+| `src/lib/wbi.ts` | WBI parameter signing (mixin key + `w_rid`/`wts`) required by `/x/player/wbi/playurl` |
+| `src/lib/bilibili-api.ts` | UGC (`fetchUgcPlayUrl`, WBI-signed) and bangumi (`fetchBangumiPlayUrl`, PGC v2) playurl clients |
+| `src/lib/download.ts` | Normal + advanced (merge) download flows |
+| `src/lib/ffmpeg.ts` | WASM FFmpeg audio/video merge |
+| `src/lib/host.ts` | Shadow-DOM helper UI |
+| `src/lib/schemas.ts` | Zod schemas (DashData, DurlSegment, DashStream, ErrorCode, etc.) |
+| `src/lib/constants.ts` | API endpoints, quality labels, fetch defaults |
+| `static/` | Static assets (icons, `manifest.json`, built content scripts) |
 | `build/` | Built extension output (load as unpacked extension) |
-| `vite.config.ts` | Vite + SvelteKit config |
+| `vite.config.ts` | Vite + SvelteKit config (also drives vitest) |
+| `vite.content.config.ts` | Vite config for the content-script bundle |
+| `tsconfig.content.json` | Standalone tsconfig for content-script type-checking |
 | `svelte.config.js` | Adapter static config |
 
 ## Key Scripts
 
 - `bun run dev` — dev server
-- `bun run build` — production build
+- `bun run build:content` — build content scripts to `static/` (runs `svelte-kit sync` first for tsconfig)
+- `bun run build` — production build of the SvelteKit extension to `build/`
+- `bun run build:all` — `build:content` then `build`
 - `bun run package` — build + zip into `extension.zip`
 - `bun run test:unit` — run vitest tests
-- `bun run check` — type-check with svelte-check
+- `bun run check` — type-check with svelte-check (note: svelte-check may crash on some TS versions; use `bunx tsc --noEmit -p tsconfig.content.json` to type-check the content scripts)
 
 ## Conventions
 
@@ -77,3 +90,8 @@ Combine with vitest for integration checks — the agent-browser process can be 
 - When adding a new page/route, create the `.svelte` file in `src/routes/` and update manifest permissions if needed in `static/manifest.json`.
 - The build output directory is `build/` — this is what gets loaded into Chrome. Do not edit `build/` directly; it is overwritten on every build.
 - If you need a background service worker or content script, add them to `static/` and reference them in `static/manifest.json`.
+- **Content scripts are built separately** via `bun run build:content` (config in `vite.content.config.ts`). The seed script (`src/content-script/seed.ts`) runs in the MV3 isolated world and injects `main.ts` into the page's main world as an ES module. After editing anything in `src/content-script/` or `src/lib/`, re-run `build:content` to regenerate `static/bilibili-helper-content-script*.js`.
+- **WBI signing is required** for the UGC `/x/player/wbi/playurl` endpoint. Use `signWbi(params)` from `src/lib/wbi.ts` before fetching. Keys are fetched from the nav API and cached (~1h TTL); on a risk-control error (`-509`/`-403`/`-352`), `fetchUgcPlayUrl` clears the cache and retries once. Bangumi (`/pgc/player/web/v2/playurl`) does **not** use WBI signing.
+- **Bilibili CDN downloads need a Referer header.** `STREAM_FETCH_DEFAULTS` in `src/lib/constants.ts` pins `referrer: 'https://www.bilibili.com/'` + `referrerPolicy: 'unsafe-url'` so `*.bilivideo.com` stream fetches don't get 403'd. Use it for any new CDN fetch.
+- Keep `PlayUrlResult` (in `bilibili-api.ts`) as the shared return shape — `host.ts` and `download.ts` consume it and should not need changes when you extend the API clients.
+- When type-checking content scripts, use `bunx tsc --noEmit -p tsconfig.content.json` (the root tsconfig relies on SvelteKit's generated `.svelte-kit/tsconfig.json`).
