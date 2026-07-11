@@ -1,0 +1,9 @@
+node_modules
+
+.svelte-kit
+
+/build
+commit_messages.txt
+pr_changes.diff
+ai_fix_summary.md
+extension.zip
