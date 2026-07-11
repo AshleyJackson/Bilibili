@@ -107,32 +107,75 @@ async function fetchInitialState(mode: 'next' | 'next2025' = 'next'): Promise<{
 			}
 		}
 
+		// Try __playinfo__ from the page context (contains playurl dash/durl data)
+		const playinfo = (window as unknown as { __playinfo__?: { data?: unknown } }).__playinfo__;
+		if (playinfo?.data) {
+			logInfo(MODULE, 'using __playinfo__ from window');
+			return { code: 0, data: playinfo.data };
+		}
+
+		// Try __INITIAL_STATE__ from the page context (contains video metadata like aid/bvid/cid/title)
+		const pageState = (window as unknown as Record<string, unknown>).__INITIAL_STATE__;
+		if (pageState) {
+			logInfo(MODULE, 'using __INITIAL_STATE__ from window');
+			return { code: 0, data: pageState };
+		}
+
+		// Try __PLAYURL_HYDRATE_DATA__ from the page context
+		const hydrateData = (window as unknown as Record<string, unknown>).__PLAYURL_HYDRATE_DATA__;
+		if (hydrateData) {
+			logInfo(MODULE, 'using __PLAYURL_HYDRATE_DATA__ from window');
+			return { code: 0, data: hydrateData };
+		}
+
+		// Fallback: fetch HTML and try inline state patterns
 		const html = await (await window.fetch(window.location.href, FETCH_DEFAULTS)).text();
 		logInfo(MODULE, 'page HTML fetched', { length: html.length });
 
-		// Try next2025 format
-		const next2025Match = html.match(/<script>window\.__INITIAL_STATE__=([\s\S]+?)<\/script>/);
-		if (next2025Match) {
-			const raw = next2025Match[1].replace(
-				/;\(function\(\)\{var s;\(s=document\.currentScript\|\|document\.scripts\[document\.scripts\.length-1\]\)\.parentNode\.removeChild\(s\);\}\)\(\);/,
-				''
-			);
-			logInfo(MODULE, 'found __INITIAL_STATE__ (next2025)');
-			return { code: 0, data: JSON.parse(raw) };
+		// Try __playinfo__ inline in HTML
+		const playinfoMatch = html.match(/window\.__playinfo__\s*=\s*(\{[\s\S]+?\});/);
+		if (playinfoMatch) {
+			try {
+				const parsed = JSON.parse(playinfoMatch[1]);
+				if (parsed?.data) {
+					logInfo(MODULE, 'found __playinfo__ in HTML');
+					return { code: 0, data: parsed.data };
+				}
+			} catch {
+				logWarn(MODULE, '__playinfo__ JSON parse failed in HTML');
+			}
 		}
 
-		// Try __NEXT_DATA__ format
+		// Try __INITIAL_STATE__ inline in HTML
+		const initMatch = html.match(/window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});/);
+		if (initMatch) {
+			try {
+				const parsed = JSON.parse(initMatch[1]);
+				logInfo(MODULE, 'found __INITIAL_STATE__ in HTML');
+				return { code: 0, data: parsed };
+			} catch {
+				logWarn(MODULE, '__INITIAL_STATE__ JSON parse failed in HTML');
+			}
+		}
+
+		// Try __NEXT_DATA__ format (older bangumi pages)
 		const nextDataMatch = html.match(
 			/<script id="__NEXT_DATA__" type="application\/json">([\s\S]+?)<\/script>/
 		);
 		if (nextDataMatch) {
-			const nextData = JSON.parse(nextDataMatch[1]);
-			const state = nextData.props.pageProps.dehydratedState.queries[0].state;
-			logInfo(MODULE, 'found __NEXT_DATA__ (next format)', { status: state.status });
-			return {
-				code: state.status === 'success' ? 0 : -1,
-				data: state
-			};
+			try {
+				const nextData = JSON.parse(nextDataMatch[1]);
+				const state = nextData.props?.pageProps?.dehydratedState?.queries?.[0]?.state;
+				if (state) {
+					logInfo(MODULE, 'found __NEXT_DATA__', { status: state.status });
+					return {
+						code: state.status === 'success' ? 0 : -1,
+						data: state
+					};
+				}
+			} catch {
+				logWarn(MODULE, '__NEXT_DATA__ parse failed');
+			}
 		}
 
 		logWarn(MODULE, 'no initial state found in page HTML');

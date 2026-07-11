@@ -6641,25 +6641,68 @@ async function fetchInitialState(mode = "next") {
 				};
 			}
 		}
-		const html = await (await window.fetch(window.location.href, FETCH_DEFAULTS)).text();
-		logInfo(MODULE, "page HTML fetched", { length: html.length });
-		const next2025Match = html.match(/<script>window\.__INITIAL_STATE__=([\s\S]+?)<\/script>/);
-		if (next2025Match) {
-			const raw = next2025Match[1].replace(/;\(function\(\)\{var s;\(s=document\.currentScript\|\|document\.scripts\[document\.scripts\.length-1\]\)\.parentNode\.removeChild\(s\);\}\)\(\);/, "");
-			logInfo(MODULE, "found __INITIAL_STATE__ (next2025)");
+		const playinfo = window.__playinfo__;
+		if (playinfo?.data) {
+			logInfo(MODULE, "using __playinfo__ from window");
 			return {
 				code: 0,
-				data: JSON.parse(raw)
+				data: playinfo.data
 			};
 		}
-		const nextDataMatch = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]+?)<\/script>/);
-		if (nextDataMatch) {
-			const state = JSON.parse(nextDataMatch[1]).props.pageProps.dehydratedState.queries[0].state;
-			logInfo(MODULE, "found __NEXT_DATA__ (next format)", { status: state.status });
+		const pageState = window.__INITIAL_STATE__;
+		if (pageState) {
+			logInfo(MODULE, "using __INITIAL_STATE__ from window");
 			return {
-				code: state.status === "success" ? 0 : -1,
-				data: state
+				code: 0,
+				data: pageState
 			};
+		}
+		const hydrateData = window.__PLAYURL_HYDRATE_DATA__;
+		if (hydrateData) {
+			logInfo(MODULE, "using __PLAYURL_HYDRATE_DATA__ from window");
+			return {
+				code: 0,
+				data: hydrateData
+			};
+		}
+		const html = await (await window.fetch(window.location.href, FETCH_DEFAULTS)).text();
+		logInfo(MODULE, "page HTML fetched", { length: html.length });
+		const playinfoMatch = html.match(/window\.__playinfo__\s*=\s*(\{[\s\S]+?\});/);
+		if (playinfoMatch) try {
+			const parsed = JSON.parse(playinfoMatch[1]);
+			if (parsed?.data) {
+				logInfo(MODULE, "found __playinfo__ in HTML");
+				return {
+					code: 0,
+					data: parsed.data
+				};
+			}
+		} catch {
+			logWarn(MODULE, "__playinfo__ JSON parse failed in HTML");
+		}
+		const initMatch = html.match(/window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});/);
+		if (initMatch) try {
+			const parsed = JSON.parse(initMatch[1]);
+			logInfo(MODULE, "found __INITIAL_STATE__ in HTML");
+			return {
+				code: 0,
+				data: parsed
+			};
+		} catch {
+			logWarn(MODULE, "__INITIAL_STATE__ JSON parse failed in HTML");
+		}
+		const nextDataMatch = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]+?)<\/script>/);
+		if (nextDataMatch) try {
+			const state = JSON.parse(nextDataMatch[1]).props?.pageProps?.dehydratedState?.queries?.[0]?.state;
+			if (state) {
+				logInfo(MODULE, "found __NEXT_DATA__", { status: state.status });
+				return {
+					code: state.status === "success" ? 0 : -1,
+					data: state
+				};
+			}
+		} catch {
+			logWarn(MODULE, "__NEXT_DATA__ parse failed");
 		}
 		logWarn(MODULE, "no initial state found in page HTML");
 		return {
