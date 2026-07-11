@@ -1,6 +1,13 @@
+/**
+ * Host UI for the Bilibili download helper.
+ *
+ * Injects a download button into the Bilibili page toolbar (next to the share button)
+ * instead of the old floating bottom bar. A small popup panel shows download links
+ * on click.
+ */
+
 import { HOST_ELEMENT_ID, QUALITY_LABELS } from './constants';
-import { SHADOW_STYLES, SETTINGS_HTML, LOADING_SPINNER, getReviewUrl } from './ui';
-import { getInternals, isHidden, isAdvancedMode, isMergeMode, formatSize } from './utils';
+import { getInternals, isAdvancedMode, isMergeMode, formatSize } from './utils';
 import { ErrorCode } from './schemas';
 import type { PlayUrlResult } from './bilibili-api';
 import type { DurlSegment, DashStream } from './schemas';
@@ -24,20 +31,212 @@ export interface DisplayInfo {
 	durl?: DurlSegment[];
 }
 
-let shadowRoot: ShadowRoot | null = null;
-let hostElement: HTMLElement | null = null;
+let cachedInfo: DisplayInfo | null = null;
+let popupEl: HTMLElement | null = null;
+let btnEl: HTMLElement | null = null;
 
-function titleHtml(info: DisplayInfo): string {
-	if (info.code !== ErrorCode.OK) return `<strong>${info.message ?? '未知错误'}</strong>`;
-	const qual = info.quality ? `[${info.quality}] ` : '';
-	if (info.dash || info.durl) {
-		return `${qual}<strong>${info.title}</strong> 的下载地址：`;
+const DOWNLOAD_BTN_ID = 'bilibili-helper-download-btn';
+
+/**
+ * Inject a download button into the Bilibili toolbar (next to the share button).
+ * Creates the popup panel lazily on first click.
+ */
+function ensureButton(): HTMLElement {
+	if (btnEl) return btnEl;
+
+	// Find the toolbar area — the share button lives inside .video-toolbar-left
+	const toolbar = document.querySelector('.video-toolbar-left');
+	if (!toolbar) {
+		logWarn(MODULE, 'toolbar not found, cannot inject button');
+		// Fallback: create a fixed button
+		btnEl = document.createElement('div');
+		btnEl.id = DOWNLOAD_BTN_ID;
+		btnEl.textContent = '下载';
+		Object.assign(btnEl.style, {
+			position: 'fixed',
+			bottom: '20px',
+			right: '20px',
+			zIndex: '99999',
+			background: '#f45a8d',
+			color: '#fff',
+			padding: '10px 20px',
+			borderRadius: '6px',
+			cursor: 'pointer',
+			fontSize: '14px',
+			fontWeight: 'bold',
+			boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
+		});
+		document.body.appendChild(btnEl);
+		btnEl.addEventListener('click', togglePopup);
+		return btnEl;
 	}
-	return `<strong>出错了:( ${info.message ?? '未知错误'}</strong>`;
+
+	// Insert a download button as the first item in the toolbar
+	btnEl = document.createElement('div');
+	btnEl.id = DOWNLOAD_BTN_ID;
+	btnEl.style.cssText = `
+		display: inline-flex;
+		align-items: center;
+		cursor: pointer;
+		margin-right: 12px;
+		color: var(--text1, #18191C);
+		font-size: 13px;
+	`;
+	btnEl.innerHTML = `
+		<svg width="22" height="22" viewBox="0 0 24 24" fill="none" style="margin-right:4px">
+			<path d="M5 20h14v-2H5v2zm7-18L5.33 9h3.84v4h3.66V9h3.84L12 2z" fill="currentColor"/>
+		</svg>
+		<span>下载</span>
+	`;
+	btnEl.addEventListener('click', togglePopup);
+	toolbar.insertBefore(btnEl, toolbar.firstChild);
+	logInfo(MODULE, 'download button injected into toolbar');
+	return btnEl;
+}
+
+function togglePopup(): void {
+	if (popupEl) {
+		popupEl.remove();
+		popupEl = null;
+		return;
+	}
+	showPopup();
+}
+
+function showPopup(): void {
+	if (popupEl) {
+		popupEl.remove();
+		popupEl = null;
+	}
+	if (!cachedInfo) {
+		logInfo(MODULE, 'no download info yet, cannot show popup');
+		return;
+	}
+
+	popupEl = document.createElement('div');
+	popupEl.id = 'bilibili-helper-popup';
+	Object.assign(popupEl.style, {
+		position: 'fixed',
+		zIndex: '999999',
+		bottom: '20px',
+		right: '20px',
+		width: '420px',
+		maxHeight: '70vh',
+		overflowY: 'auto',
+		background: '#fff',
+		border: '1px solid #e3e5e7',
+		borderRadius: '8px',
+		boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+		padding: '16px 20px',
+		fontSize: '13px',
+		color: '#18191C',
+		lineHeight: '1.5'
+	});
+
+	const info = cachedInfo;
+	const title = info.title || 'Untitled';
+	const qual = info.quality ? `[${info.quality}]` : '';
+
+	popupEl.innerHTML = `
+		<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+			<strong>${qual} ${escapeHtml(title)}</strong>
+			<button id="bilibili-helper-popup-close" style="border:none;background:none;cursor:pointer;font-size:18px;color:#999;padding:0 4px">&times;</button>
+		</div>
+		<div id="bilibili-helper-popup-links" style="margin-bottom:8px">
+			${linksHtml(info)}
+		</div>
+		<div style="border-top:1px solid #f1f2f3;padding-top:8px;margin-top:4px;font-size:12px;color:#9499A0">
+			<label style="margin-right:12px"><input type="radio" name="helper-dl-mode" value="advanced" ${isAdvancedMode() ? 'checked' : ''}> Advanced</label>
+			<label style="margin-right:12px"><input type="radio" name="helper-dl-mode" value="normal" ${!isAdvancedMode() ? 'checked' : ''}> Normal</label>
+			<label id="helper-merge-label" style="margin-right:12px;${!isDash(info) ? 'display:none' : ''}">
+				<input type="checkbox" id="helper-merge-cb" ${isMergeMode() ? 'checked' : ''}> Merge
+			</label>
+		</div>
+		<div id="bilibili-helper-popup-logs" style="margin-top:8px;background:#2d2d2d;color:#9ab45a;border-radius:4px;padding:8px;font-size:11px;max-height:200px;overflow-y:auto;word-break:break-all"></div>
+	`;
+
+	document.body.appendChild(popupEl);
+
+	popupEl.querySelector('#bilibili-helper-popup-close')!.addEventListener('click', () => {
+		popupEl?.remove();
+		popupEl = null;
+	});
+
+	// Wire settings changes
+	popupEl.querySelectorAll('input[name="helper-dl-mode"]').forEach((el) => {
+		el.addEventListener('change', () => {
+			const val = (el as HTMLInputElement).value;
+			localStorage.bilibili_helper_download_mode = val;
+			rebuildPopupLinks();
+		});
+	});
+	const mergeCb = popupEl.querySelector('#helper-merge-cb') as HTMLInputElement;
+	if (mergeCb) {
+		mergeCb.addEventListener('change', () => {
+			localStorage.bilibili_helper_merge_mode = mergeCb.checked ? 'on' : 'off';
+			rebuildPopupLinks();
+		});
+	}
+
+	// Wire download clicks
+	popupEl.querySelector('#bilibili-helper-popup-links')!.addEventListener('click', (e) => {
+		const target = e.target as HTMLElement;
+		if (target.tagName.toLowerCase() !== 'a') return;
+		const anchor = target as HTMLAnchorElement;
+		if (anchor.classList.contains('disabled')) return;
+		e.preventDefault();
+		e.stopPropagation();
+
+		const filename = anchor.getAttribute('title') ?? 'download';
+		const logsEl = popupEl?.querySelector('#bilibili-helper-popup-logs');
+
+		if (anchor.getAttribute('merge') === 'on') {
+			const durlsAttr = anchor.getAttribute('durls');
+			if (!durlsAttr) return;
+			const segments: Array<{ url: string; size?: number }> = JSON.parse(decodeURIComponent(durlsAttr));
+			appendLog(logsEl, `merging ${filename}...`);
+			downloadAndMerge(anchor, segments, filename, logsEl!).catch((err) => {
+				appendLog(logsEl, `merge failed: ${err}`);
+			});
+		} else {
+			const durlAttr = anchor.getAttribute('durl');
+			if (!durlAttr) return;
+			const segment: { url: string; size?: number } = JSON.parse(decodeURIComponent(durlAttr));
+			appendLog(logsEl, `downloading ${filename}...`);
+			downloadSingle(anchor, segment, filename, logsEl!).catch((err) => {
+				appendLog(logsEl, `download failed: ${err}`);
+			});
+		}
+	});
+}
+
+function isDash(info: DisplayInfo): boolean {
+	return !!info.dash;
+}
+
+function rebuildPopupLinks(): void {
+	const linksEl = popupEl?.querySelector('#bilibili-helper-popup-links');
+	if (!linksEl || !cachedInfo) return;
+	linksEl.innerHTML = linksHtml(cachedInfo);
+	// Re-attach merge label visibility
+	const mergeLabel = popupEl?.querySelector('#helper-merge-label') as HTMLElement;
+	if (mergeLabel) {
+		mergeLabel.style.display = isDash(cachedInfo) ? '' : 'none';
+	}
+}
+
+function appendLog(el: HTMLElement | null, msg: string): void {
+	if (!el) return;
+	el.innerHTML += `<div>${escapeHtml(msg)}</div>`;
+	el.scrollTop = el.scrollHeight;
+}
+
+function escapeHtml(s: string): string {
+	return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function linksHtml(info: DisplayInfo): string {
-	if (info.code !== ErrorCode.OK) return '';
+	if (info.code !== ErrorCode.OK) return `<div style="color:#f85a54">${escapeHtml(info.message || 'Unknown error')}</div>`;
 	const isDash = !!info.dash;
 	const segments: Array<{ url: string; size?: number }> = [];
 	if (isDash && info.dash) {
@@ -54,279 +253,55 @@ function linksHtml(info: DisplayInfo): string {
 	if (!isAdvancedMode()) {
 		return createNormalDownloadLink(title, segments, isDash);
 	}
-
 	if (!isMergeMode() || !isDash) {
 		return createAdvancedNoMergeLinks(segments, title, isDash);
 	}
-
 	return createMergeLink(segments, title);
 }
 
-function setupSettings(shadow: ShadowRoot, buildLinks: () => void): void {
-	const advanced = shadow.getElementById('setting-download-mode-advanced') as HTMLInputElement;
-	const normal = shadow.getElementById('setting-download-mode-normal') as HTMLInputElement;
-	const mergeOn = shadow.getElementById('setting-merge-on') as HTMLInputElement;
-	const mergeOff = shadow.getElementById('setting-merge-off') as HTMLInputElement;
-	const advancedSettings = shadow.getElementById('setting-advanced') as HTMLElement;
-	const durlsEl = shadow.getElementById('durls') as HTMLElement;
-	const toggle = shadow.getElementById('toggle') as HTMLElement;
-	const content = shadow.getElementById('content') as HTMLElement;
-	const contentHost = document.getElementById(HOST_ELEMENT_ID);
-	const actions = shadow.getElementById('actions') as HTMLElement;
-
-	const disable = (): void => {
-		advanced.disabled = true;
-		normal.disabled = true;
-		mergeOn.disabled = true;
-		mergeOff.disabled = true;
-	};
-
-	const enable = (): void => {
-		advanced.disabled = false;
-		normal.disabled = false;
-		mergeOn.disabled = false;
-		mergeOff.disabled = false;
-	};
-
-	if (isAdvancedMode()) {
-		advanced.checked = true;
-		advancedSettings.style.display = 'block';
-	} else {
-		normal.checked = true;
-		advancedSettings.style.display = 'none';
-	}
-
-	if (isMergeMode()) {
-		mergeOn.checked = true;
-	} else {
-		mergeOff.checked = true;
-	}
-
-	advanced.addEventListener('change', () => {
-		logInfo(MODULE, 'setting changed: download mode -> advanced');
-		localStorage.bilibili_helper_download_mode = 'advanced';
-		advancedSettings.style.display = 'block';
-		buildLinks();
-	});
-
-	normal.addEventListener('change', () => {
-		logInfo(MODULE, 'setting changed: download mode -> normal');
-		localStorage.bilibili_helper_download_mode = 'normal';
-		advancedSettings.style.display = 'none';
-		buildLinks();
-	});
-
-	mergeOn.addEventListener('change', () => {
-		logInfo(MODULE, 'setting changed: merge mode -> on');
-		localStorage.bilibili_helper_merge_mode = 'on';
-		buildLinks();
-	});
-
-	mergeOff.addEventListener('change', () => {
-		logInfo(MODULE, 'setting changed: merge mode -> off');
-		localStorage.bilibili_helper_merge_mode = 'off';
-		buildLinks();
-	});
-
-	durlsEl.addEventListener('click', (e) => {
-		const target = e.target as HTMLElement;
-		if (target.tagName.toLowerCase() !== 'a') return;
-		const anchor = target as HTMLAnchorElement;
-		if (anchor.getAttribute('mode') !== 'advanced') return;
-		if (anchor.classList.contains('disabled')) return;
-
-		e.preventDefault();
-		e.stopPropagation();
-
-		const filename = anchor.getAttribute('title') ?? 'download';
-
-		if (anchor.getAttribute('merge') === 'on') {
-			logInfo(MODULE, 'download click: merge mode', { filename });
-			const durlsAttr = anchor.getAttribute('durls');
-			if (!durlsAttr) return;
-			const progressEl = shadow.querySelector(`ul[durls="${CSS.escape(durlsAttr)}"]`) as HTMLElement;
-			const segments: Array<{ url: string; size?: number }> = JSON.parse(decodeURIComponent(durlsAttr));
-			disable();
-			downloadAndMerge(anchor, segments, filename, progressEl).then(enable).catch((err) => {
-				logError(MODULE, 'downloadAndMerge failed', err);
-				enable();
-			});
-		} else {
-			logInfo(MODULE, 'download click: single mode', { filename });
-			const durlAttr = anchor.getAttribute('durl');
-			if (!durlAttr) return;
-			const progressEl = shadow.querySelector(`span[durl="${CSS.escape(durlAttr)}"]`) as HTMLElement;
-			const segment: { url: string; size?: number } = JSON.parse(decodeURIComponent(durlAttr));
-			disable();
-			downloadSingle(anchor, segment, filename, progressEl).then(enable).catch((err) => {
-				logError(MODULE, 'downloadSingle failed', err);
-				enable();
-			});
-		}
-	});
-
-	toggle.addEventListener('click', () => {
-		if (isHidden()) {
-			logInfo(MODULE, 'toggle: show UI');
-			localStorage.bilibili_helper_show = 'show';
-			content.classList.remove('hide');
-			toggle.innerHTML = '收起';
-			contentHost?.classList.remove('hide');
-			actions.style.top = '0';
-			const notice = shadow.getElementById('notice-frame') as HTMLIFrameElement;
-			notice?.contentWindow?.postMessage({ action: 'getHeight' }, 'https://csser.top');
-		} else {
-			logInfo(MODULE, 'toggle: hide UI');
-			localStorage.bilibili_helper_show = 'hide';
-			content.classList.add('hide');
-			contentHost?.classList.add('hide');
-			toggle.innerHTML = '打开B站下载助手';
-			actions.style.top = '0';
-		}
-	});
-
-	if (contentHost) {
-		contentHost.addEventListener('scroll', () => {
-			actions.style.top = contentHost.scrollTop + 'px';
-		});
-	}
-}
-
-function setupNotice(shadow: ShadowRoot): void {
-	const iframe = shadow.getElementById('notice-frame') as HTMLIFrameElement;
-	if (!iframe) return;
-
-	iframe.onload = () => {
-		logInfo(MODULE, 'notice iframe loaded');
-		iframe.contentWindow?.postMessage({ action: 'getHeight' }, 'https://csser.top');
-		const internals = getInternals();
-		iframe.contentWindow?.postMessage(
-			{ action: 'setVersion', version: { name: internals.name, code: parseInt(internals.version.replace(/\./g, ''), 10) } },
-			'https://csser.top'
-		);
-		iframe.contentWindow?.postMessage({ action: 'setTheme', theme: 'null' }, 'https://csser.top');
-	};
-
-	window.addEventListener('message', (e) => {
-		if (e.origin !== 'https://csser.top' || !e.data) return;
-		if (e.data.action === 'reportHeight') {
-			iframe.style.height = (e.data.height + 10) + 'px';
-		}
-	});
-
-	iframe.src = `https://csser.top/bilibili/notice.html?t=${Date.now()}`;
-
-	window.addEventListener('resize', () => {
-		iframe.contentWindow?.postMessage({ action: 'getHeight' }, 'https://csser.top');
-	});
-}
-
 /**
- * Update or create the host UI element with the given download info.
+ * Show or update the download info. If the button doesn't exist yet, inject it.
  */
 export function showDownloadInfo(info: DisplayInfo, loading = false): void {
 	logInfo(MODULE, 'showDownloadInfo', { code: info.code, title: info.title, quality: info.quality, hasDash: !!info.dash, hasDurl: !!info.durl, loading });
-	const el = document.getElementById(HOST_ELEMENT_ID);
-	const hostStyles = `display:block;overflow:auto;position:fixed;z-index:${Number.MAX_SAFE_INTEGER};bottom:0;left:0;right:0;max-height:50%;width:100%;background: #fff;border-top: 1px solid #ccc;box-shadow: rgba(0, 0, 0, 0.2) 0 -5px 10px;`;
 
-	if (el) {
-		// Update existing host
-		shadowRoot = el.shadowRoot!;
-		const titleEl = shadowRoot.getElementById('title')!;
-		titleEl.innerHTML = loading ? '加载中' + LOADING_SPINNER : titleHtml(info);
+	if (loading) {
+		// Don't show loading state — just cache and wait for the real data
+		cachedInfo = null;
+		return;
+	}
 
-		const durlsEl = shadowRoot.getElementById('durls')!;
-		durlsEl.innerHTML = loading ? '' : linksHtml(info);
+	cachedInfo = info;
 
-		const styleEl = shadowRoot.getElementById('d-style')!;
-		styleEl.textContent = !info.dash && info.durl ? '#setting-advanced{display:none!important}' : '';
-	} else {
-		// Create host element
-		hostElement = document.createElement('div');
-		hostElement.id = HOST_ELEMENT_ID;
-		hostElement.style.cssText = hostStyles;
-		if (isHidden()) hostElement.classList.add('hide');
-		document.body.appendChild(hostElement);
+	// Inject the button into the toolbar
+	ensureButton();
 
-		shadowRoot = hostElement.attachShadow({ mode: 'open' });
-		shadowRoot.innerHTML = `
-      <style>${SHADOW_STYLES}
-        #${CSS.escape(HOST_ELEMENT_ID)}.hide{
-          width:auto!important;
-          left:auto!important;
-          background:transparent!important;
-          border:0 none!important;
-          border-radius: 6px 0 0 0;
-          box-shadow: rgba(0, 0, 0, 0.2) -5px -5px 10px!important;
-        }
-        .player-fullscreen-fix #${CSS.escape(HOST_ELEMENT_ID)} {
-          z-index: 9!important;
-        }
-      </style>
-      <div id="content" ${isHidden() ? 'class="hide"' : ''}>
-        <div id="side-bar">
-          <div class="notice">
-            <iframe id="notice-frame" frameborder="0"></iframe>
-          </div>
-        </div>
-        <div id="main">
-          <style id="d-style">${!info.dash && info.durl ? '#setting-advanced{display:none!important}' : ''}</style>
-          ${SETTINGS_HTML}
-          <h3 id="title">${loading ? '加载中' + LOADING_SPINNER : titleHtml(info)}</h3>
-          <ul id="durls">
-            ${loading ? '' : linksHtml(info)}
-          </ul>
-          <div class="beg">
-            <p>
-              如果这个工具确实帮到了您，烦请给个五星好评，谢谢😊
-              <a class="btn" href="${getReviewUrl()}" target="_blank">去评价</a>
-            </p>
-          </div>
-          <div id="bilibliHelperLogs">
-            <h4>解析日志：</h4>
-          </div>
-        </div>
-        <div id="actions">
-          <button id="toggle" class="btn-large">${isHidden() ? '打开B站下载助手' : '收起'}</button>
-        </div>
-      </div>
-    `;
-
-		setupSettings(shadowRoot, () => {
-			const durlsEl = shadowRoot!.getElementById('durls')!;
-			durlsEl.innerHTML = linksHtml(info);
-		});
-		setupNotice(shadowRoot);
+	// If popup is already open, update its contents
+	if (popupEl) {
+		rebuildPopupLinks();
 	}
 }
 
 /**
- * Append a log message to the host UI's log panel.
+ * Append a log message to the console (and popup if open).
  */
 export function log(...args: unknown[]): void {
 	const ns = '[bilibili downloader]';
 	console.log(ns, '[host]', ...args);
-	try {
-		const el = document.getElementById(HOST_ELEMENT_ID);
-		if (!el) return;
-		const logs = el.shadowRoot?.querySelector('#bilibliHelperLogs');
-		if (!logs) return;
+	// Also append to open popup
+	const logsEl = popupEl?.querySelector('#bilibili-helper-popup-logs');
+	if (logsEl) {
+		const line = args.map((a) => (typeof a === 'object' ? safeJson(a) : String(a))).join(' ');
+		logsEl.innerHTML += `<div>${escapeHtml(line)}</div>`;
+		logsEl.scrollTop = logsEl.scrollHeight;
+	}
+}
 
-		const line = args
-			.map((a) => {
-				if (typeof a === 'object') {
-					try {
-						return JSON.stringify(a);
-					} catch {
-						return String(a);
-					}
-				}
-				return String(a);
-			})
-			.join(' ');
-		logs.innerHTML += `<p>${line}</p>`;
+function safeJson(a: unknown): string {
+	try {
+		return JSON.stringify(a);
 	} catch {
-		// Silently ignore if DOM not ready
+		return String(a);
 	}
 }
 
@@ -335,8 +310,17 @@ export function log(...args: unknown[]): void {
  */
 export function clearLogs(): void {
 	logInfo(MODULE, 'logs cleared');
-	const el = document.getElementById(HOST_ELEMENT_ID);
-	if (!el) return;
-	const logs = el.shadowRoot?.querySelector('#bilibliHelperLogs');
-	if (logs) logs.innerHTML = '';
+	const logsEl = popupEl?.querySelector('#bilibili-helper-popup-logs');
+	if (logsEl) logsEl.innerHTML = '';
+}
+
+/**
+ * Remove the download button and popup from the page.
+ */
+export function cleanup(): void {
+	btnEl?.remove();
+	btnEl = null;
+	popupEl?.remove();
+	popupEl = null;
+	cachedInfo = null;
 }

@@ -11,7 +11,6 @@ var QUALITY_LABELS = {
 	120: "4K 超高清",
 	125: "HDR 真彩"
 };
-var HOST_ELEMENT_ID = "bilibili-helper-host";
 var FFMPEG_WORKER = "ffmpeg.worker.js";
 var FFMPEG_CORE_JS = "ffmpeg-core.js";
 var FFMPEG_CORE_WASM = "ffmpeg-core.wasm";
@@ -21,7 +20,6 @@ var BANGUMI_PLAY_URL_API = "https://api.bilibili.com/pgc/player/web/v2/playurl";
 var NAV_API = "https://api.bilibili.com/x/web-interface/nav";
 var SETTING_DOWNLOAD_MODE = "bilibili_helper_download_mode";
 var SETTING_MERGE_MODE = "bilibili_helper_merge_mode";
-var SETTING_SHOW = "bilibili_helper_show";
 var FETCH_DEFAULTS = { credentials: "include" };
 var STREAM_FETCH_DEFAULTS = {
 	credentials: "include",
@@ -4087,7 +4085,6 @@ object({
 //#endregion
 //#region src/lib/utils.ts
 var isBilibili = () => location.hostname === "www.bilibili.com" || location.hostname === "bilibili.com";
-var isEdge = () => window.navigator.userAgent.indexOf("Edg/") !== -1;
 var isVideoPage = () => /\/video\/(av|bv)[0-9a-zA-Z]+/i.test(window.location.pathname);
 var isBangumiPage = () => /\/bangumi\/play\/\S+/i.test(window.location.pathname);
 function formatSize(bytes) {
@@ -4102,9 +4099,6 @@ function isAdvancedMode() {
 }
 function isMergeMode() {
 	return localStorage.getItem(SETTING_MERGE_MODE) !== "off";
-}
-function isHidden() {
-	return localStorage.getItem(SETTING_SHOW) === "hide";
 }
 function getInternals() {
 	const el = document.getElementById("bilibili-helper-ext-content-script");
@@ -4138,184 +4132,6 @@ function downloadBlob(data, filename, container, onDone) {
 	container.appendChild(anchor);
 	anchor.click();
 	onDone?.();
-}
-//#endregion
-//#region src/lib/ui.ts
-var SHADOW_STYLES = `p,
-a,
-div,
-span,
-li,
-i,
-b,
-strong,
-input,
-button,
-label {
-  font-size: inherit;
-}
-li {
-  margin-bottom: 5px;
-}
-p {
-  margin: 0;
-  line-height: 1.5;
-}
-h1 {
-  font-size: 20px;
-  font-weight: bold;
-  margin-bottom: 20px;
-}
-h3 {
-  font-size: 16px;
-  margin: 1em 0;
-}
-#title {
-  font-size: 16px;
-  font-weight: normal;
-}
-#content {
-  display: flex;
-  width: 100%;
-  font-size: 14px;
-  position: relative;
-}
-a {
-  color: #00a1d6 !important;
-  text-decoration: none;
-}
-a:hover {
-  text-decoration: underline;
-}
-a.disabled {
-  color: #666 !important;
-}
-a.disabled:hover {
-  text-decoration: none;
-  cursor: not-allowed;
-}
-#side-bar {
-  flex: 3;
-  padding: 20px;
-  border-right: 1px solid #ccc;
-  margin-right: -1px;
-}
-#main {
-  flex: 7;
-  padding: 20px;
-  border-left: 1px solid #ccc;
-}
-#notice-frame {
-  width: 100%;
-  padding: 0;
-}
-.donate {
-  border-top: 1px solid #ccc;
-  padding-top: 10px;
-}
-#zanshang {
-  width: 80%;
-}
-.setting-item {
-  margin-bottom: 8px;
-}
-.setting-item .label {
-  font-weight: bold;
-  width: 6em;
-  display: inline-block;
-  text-align: right;
-}
-.desc {
-  padding-left: 6em;
-}
-#actions {
-  position: absolute;
-  right: 0;
-  top: 0;
-}
-.btn-large {
-  border: 0 none;
-  background: #f45a8d;
-  border-radius: 6px;
-  color: #fff;
-  padding: 10px 20px;
-}
-#toggle {
-  border-radius: 0 0 0 6px;
-  outline: none;
-  cursor: pointer;
-}
-.hide #side-bar {
-  display: none;
-}
-.hide #main {
-  display: none;
-}
-.hide #toggle {
-  border-radius: 6px 0 0 0;
-}
-.hide #actions {
-  position: static;
-}
-
-a.btn {
-  border: 0 none;
-  background: #f45a8d;
-  text-decoration: none !important;
-  color: #fff !important;
-  border-radius: 3px;
-  padding: 5px 10px;
-  display: inline-block;
-}
-.settings {
-  border-left: 5px solid #ccc;
-  background: #eee;
-  padding: 16px 16px 8px 0;
-}
-.size {
-  margin: 0 5px;
-}
-#bilibliHelperLogs {
-  margin-top: 10px;
-  max-width: 600px;
-  max-height: 400px;
-  overflow: auto;
-  border: 1px solid #ccc;
-  border-radius: 5px;
-  padding: 10px;
-  line-height: 1.2;
-  background: rgb(50, 50, 50);
-  color: rgb(154, 180, 90);
-  white-space: normal;
-  word-break: break-all;
-  word-wrap: break-word;
-  font-size: 11px;
-}
-`;
-var SETTINGS_HTML = `<h1 style="margin-top: 0;">B站下载助手</h1>
-<p style="margin-bottom: 10px;"><a target="_blank" href="https://docs.qq.com/doc/DQ2lhaWRpS0tubVVF">使用教程及常见问题解答</a></p>
-<div class="settings">
-  <div class="setting-item">
-    <span class="label">清晰度：</span>
-    <span>请在页面中B站自己的播放器内切换清晰度</span>
-  </div>
-  <div class="setting-item">
-    <span class="label">下载模式：</span>
-    <label><input id="setting-download-mode-advanced" checked name="setting-download-mode" type="radio" /> 高级</label>
-    <label><input id="setting-download-mode-normal" name="setting-download-mode" type="radio" /> 兼容</label>
-    <p class="desc">高级模式支持自动重命名和合并下载，但会占用较大的系统运行内存<br />兼容模式直接使用浏览器的默认下载，资源占用很小，但不支持自动重命名和合并下载</p>
-  </div>
-  <div class="setting-item" id="setting-advanced">
-    <span class="label">合并下载：</span>
-    <label><input id="setting-merge-on" checked name="setting-merge" type="radio"> 开</label>
-    <label><input id="setting-merge-off" name="setting-merge" type="radio"> 关</label>
-    <p class="desc">高级模式下载过程中请<strong style="color: red;">不要</strong>刷新或关闭页面，也<strong
-        style="color: red;">不要</strong>切换分集和清晰度</p>
-  </div>
-</div>`;
-var LOADING_SPINNER = " <svg style=\"vertical-align: middle\" width=\"50px\" height=\"50px\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\" preserveAspectRatio=\"xMidYMid\" class=\"lds-pacman\"><g ng-attr-style=\"display:{{config.showBean}}\" style=\"display:block\"><circle cx=\"62.0973\" cy=\"50\" r=\"4\" ng-attr-fill=\"{{config.c2}}\" fill=\"#00a1d6\"><animate attributeName=\"cx\" calcMode=\"linear\" values=\"95;35\" keyTimes=\"0;1\" dur=\"1\" begin=\"-0.67s\" repeatCount=\"indefinite\"></animate><animate attributeName=\"fill-opacity\" calcMode=\"linear\" values=\"0;1;1\" keyTimes=\"0;0.2;1\" dur=\"1\" begin=\"-0.67s\" repeatCount=\"indefinite\"></animate></circle><circle cx=\"82.4973\" cy=\"50\" r=\"4\" ng-attr-fill=\"{{config.c2}}\" fill=\"#00a1d6\"><animate attributeName=\"cx\" calcMode=\"linear\" values=\"95;35\" keyTimes=\"0;1\" dur=\"1\" begin=\"-0.33s\" repeatCount=\"indefinite\"></animate><animate attributeName=\"fill-opacity\" calcMode=\"linear\" values=\"0;1;1\" keyTimes=\"0;0.2;1\" dur=\"1\" begin=\"-0.33s\" repeatCount=\"indefinite\"></animate></circle><circle cx=\"42.2973\" cy=\"50\" r=\"4\" ng-attr-fill=\"{{config.c2}}\" fill=\"#00a1d6\"><animate attributeName=\"cx\" calcMode=\"linear\" values=\"95;35\" keyTimes=\"0;1\" dur=\"1\" begin=\"0s\" repeatCount=\"indefinite\"></animate><animate attributeName=\"fill-opacity\" calcMode=\"linear\" values=\"0;1;1\" keyTimes=\"0;0.2;1\" dur=\"1\" begin=\"0s\" repeatCount=\"indefinite\"></animate></circle></g><g ng-attr-transform=\"translate({{config.showBeanOffset}} 0)\" transform=\"translate(-15 0)\"><path d=\"M50 50L20 50A30 30 0 0 0 80 50Z\" ng-attr-fill=\"{{config.c1}}\" fill=\"#f45a8d\" transform=\"rotate(10.946 50 50)\"><animateTransform attributeName=\"transform\" type=\"rotate\" calcMode=\"linear\" values=\"0 50 50;45 50 50;0 50 50\" keyTimes=\"0;0.5;1\" dur=\"1s\" begin=\"0s\" repeatCount=\"indefinite\"></animateTransform></path><path d=\"M50 50L20 50A30 30 0 0 1 80 50Z\" ng-attr-fill=\"{{config.c1}}\" fill=\"#f45a8d\" transform=\"rotate(-10.946 50 50)\"><animateTransform attributeName=\"transform\" type=\"rotate\" calcMode=\"linear\" values=\"0 50 50;-45 50 50;0 50 50\" keyTimes=\"0;0.5;1\" dur=\"1s\" begin=\"0s\" repeatCount=\"indefinite\"></animateTransform></path></g></svg>";
-function getReviewUrl() {
-	return isEdge() ? "https://microsoftedge.microsoft.com/addons/detail/cagicamgdlbdmonbclkpgiabbldodgae" : "https://chromewebstore.google.com/detail/bfcbfobhcjbkilcbehlnlchiinokiijp";
 }
 //#endregion
 //#region src/lib/logger.ts
@@ -5119,16 +4935,182 @@ function createMergeLink(segments, filename) {
 //#endregion
 //#region src/lib/host.ts
 var MODULE$3 = "host";
-var shadowRoot = null;
-var hostElement = null;
-function titleHtml(info) {
-	if (info.code !== ErrorCode.OK) return `<strong>${info.message ?? "未知错误"}</strong>`;
-	const qual = info.quality ? `[${info.quality}] ` : "";
-	if (info.dash || info.durl) return `${qual}<strong>${info.title}</strong> 的下载地址：`;
-	return `<strong>出错了:( ${info.message ?? "未知错误"}</strong>`;
+var cachedInfo = null;
+var popupEl = null;
+var btnEl = null;
+var DOWNLOAD_BTN_ID = "bilibili-helper-download-btn";
+/**
+* Inject a download button into the Bilibili toolbar (next to the share button).
+* Creates the popup panel lazily on first click.
+*/
+function ensureButton() {
+	if (btnEl) return btnEl;
+	const toolbar = document.querySelector(".video-toolbar-left");
+	if (!toolbar) {
+		logWarn(MODULE$3, "toolbar not found, cannot inject button");
+		btnEl = document.createElement("div");
+		btnEl.id = DOWNLOAD_BTN_ID;
+		btnEl.textContent = "下载";
+		Object.assign(btnEl.style, {
+			position: "fixed",
+			bottom: "20px",
+			right: "20px",
+			zIndex: "99999",
+			background: "#f45a8d",
+			color: "#fff",
+			padding: "10px 20px",
+			borderRadius: "6px",
+			cursor: "pointer",
+			fontSize: "14px",
+			fontWeight: "bold",
+			boxShadow: "0 2px 8px rgba(0,0,0,0.3)"
+		});
+		document.body.appendChild(btnEl);
+		btnEl.addEventListener("click", togglePopup);
+		return btnEl;
+	}
+	btnEl = document.createElement("div");
+	btnEl.id = DOWNLOAD_BTN_ID;
+	btnEl.style.cssText = `
+		display: inline-flex;
+		align-items: center;
+		cursor: pointer;
+		margin-right: 12px;
+		color: var(--text1, #18191C);
+		font-size: 13px;
+	`;
+	btnEl.innerHTML = `
+		<svg width="22" height="22" viewBox="0 0 24 24" fill="none" style="margin-right:4px">
+			<path d="M5 20h14v-2H5v2zm7-18L5.33 9h3.84v4h3.66V9h3.84L12 2z" fill="currentColor"/>
+		</svg>
+		<span>下载</span>
+	`;
+	btnEl.addEventListener("click", togglePopup);
+	toolbar.insertBefore(btnEl, toolbar.firstChild);
+	logInfo(MODULE$3, "download button injected into toolbar");
+	return btnEl;
+}
+function togglePopup() {
+	if (popupEl) {
+		popupEl.remove();
+		popupEl = null;
+		return;
+	}
+	showPopup();
+}
+function showPopup() {
+	if (popupEl) {
+		popupEl.remove();
+		popupEl = null;
+	}
+	if (!cachedInfo) {
+		logInfo(MODULE$3, "no download info yet, cannot show popup");
+		return;
+	}
+	popupEl = document.createElement("div");
+	popupEl.id = "bilibili-helper-popup";
+	Object.assign(popupEl.style, {
+		position: "fixed",
+		zIndex: "999999",
+		bottom: "20px",
+		right: "20px",
+		width: "420px",
+		maxHeight: "70vh",
+		overflowY: "auto",
+		background: "#fff",
+		border: "1px solid #e3e5e7",
+		borderRadius: "8px",
+		boxShadow: "0 4px 20px rgba(0,0,0,0.15)",
+		padding: "16px 20px",
+		fontSize: "13px",
+		color: "#18191C",
+		lineHeight: "1.5"
+	});
+	const info = cachedInfo;
+	const title = info.title || "Untitled";
+	const qual = info.quality ? `[${info.quality}]` : "";
+	popupEl.innerHTML = `
+		<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+			<strong>${qual} ${escapeHtml(title)}</strong>
+			<button id="bilibili-helper-popup-close" style="border:none;background:none;cursor:pointer;font-size:18px;color:#999;padding:0 4px">&times;</button>
+		</div>
+		<div id="bilibili-helper-popup-links" style="margin-bottom:8px">
+			${linksHtml(info)}
+		</div>
+		<div style="border-top:1px solid #f1f2f3;padding-top:8px;margin-top:4px;font-size:12px;color:#9499A0">
+			<label style="margin-right:12px"><input type="radio" name="helper-dl-mode" value="advanced" ${isAdvancedMode() ? "checked" : ""}> Advanced</label>
+			<label style="margin-right:12px"><input type="radio" name="helper-dl-mode" value="normal" ${!isAdvancedMode() ? "checked" : ""}> Normal</label>
+			<label id="helper-merge-label" style="margin-right:12px;${!isDash(info) ? "display:none" : ""}">
+				<input type="checkbox" id="helper-merge-cb" ${isMergeMode() ? "checked" : ""}> Merge
+			</label>
+		</div>
+		<div id="bilibili-helper-popup-logs" style="margin-top:8px;background:#2d2d2d;color:#9ab45a;border-radius:4px;padding:8px;font-size:11px;max-height:200px;overflow-y:auto;word-break:break-all"></div>
+	`;
+	document.body.appendChild(popupEl);
+	popupEl.querySelector("#bilibili-helper-popup-close").addEventListener("click", () => {
+		popupEl?.remove();
+		popupEl = null;
+	});
+	popupEl.querySelectorAll("input[name=\"helper-dl-mode\"]").forEach((el) => {
+		el.addEventListener("change", () => {
+			const val = el.value;
+			localStorage.bilibili_helper_download_mode = val;
+			rebuildPopupLinks();
+		});
+	});
+	const mergeCb = popupEl.querySelector("#helper-merge-cb");
+	if (mergeCb) mergeCb.addEventListener("change", () => {
+		localStorage.bilibili_helper_merge_mode = mergeCb.checked ? "on" : "off";
+		rebuildPopupLinks();
+	});
+	popupEl.querySelector("#bilibili-helper-popup-links").addEventListener("click", (e) => {
+		const target = e.target;
+		if (target.tagName.toLowerCase() !== "a") return;
+		const anchor = target;
+		if (anchor.classList.contains("disabled")) return;
+		e.preventDefault();
+		e.stopPropagation();
+		const filename = anchor.getAttribute("title") ?? "download";
+		const logsEl = popupEl?.querySelector("#bilibili-helper-popup-logs");
+		if (anchor.getAttribute("merge") === "on") {
+			const durlsAttr = anchor.getAttribute("durls");
+			if (!durlsAttr) return;
+			const segments = JSON.parse(decodeURIComponent(durlsAttr));
+			appendLog(logsEl, `merging ${filename}...`);
+			downloadAndMerge(anchor, segments, filename, logsEl).catch((err) => {
+				appendLog(logsEl, `merge failed: ${err}`);
+			});
+		} else {
+			const durlAttr = anchor.getAttribute("durl");
+			if (!durlAttr) return;
+			const segment = JSON.parse(decodeURIComponent(durlAttr));
+			appendLog(logsEl, `downloading ${filename}...`);
+			downloadSingle(anchor, segment, filename, logsEl).catch((err) => {
+				appendLog(logsEl, `download failed: ${err}`);
+			});
+		}
+	});
+}
+function isDash(info) {
+	return !!info.dash;
+}
+function rebuildPopupLinks() {
+	const linksEl = popupEl?.querySelector("#bilibili-helper-popup-links");
+	if (!linksEl || !cachedInfo) return;
+	linksEl.innerHTML = linksHtml(cachedInfo);
+	const mergeLabel = popupEl?.querySelector("#helper-merge-label");
+	if (mergeLabel) mergeLabel.style.display = isDash(cachedInfo) ? "" : "none";
+}
+function appendLog(el, msg) {
+	if (!el) return;
+	el.innerHTML += `<div>${escapeHtml(msg)}</div>`;
+	el.scrollTop = el.scrollHeight;
+}
+function escapeHtml(s) {
+	return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 function linksHtml(info) {
-	if (info.code !== ErrorCode.OK) return "";
+	if (info.code !== ErrorCode.OK) return `<div style="color:#f85a54">${escapeHtml(info.message || "Unknown error")}</div>`;
 	const isDash = !!info.dash;
 	const segments = [];
 	if (isDash && info.dash) segments.push({
@@ -5144,145 +5126,8 @@ function linksHtml(info) {
 	if (!isMergeMode() || !isDash) return createAdvancedNoMergeLinks(segments, title, isDash);
 	return createMergeLink(segments, title);
 }
-function setupSettings(shadow, buildLinks) {
-	const advanced = shadow.getElementById("setting-download-mode-advanced");
-	const normal = shadow.getElementById("setting-download-mode-normal");
-	const mergeOn = shadow.getElementById("setting-merge-on");
-	const mergeOff = shadow.getElementById("setting-merge-off");
-	const advancedSettings = shadow.getElementById("setting-advanced");
-	const durlsEl = shadow.getElementById("durls");
-	const toggle = shadow.getElementById("toggle");
-	const content = shadow.getElementById("content");
-	const contentHost = document.getElementById(HOST_ELEMENT_ID);
-	const actions = shadow.getElementById("actions");
-	const disable = () => {
-		advanced.disabled = true;
-		normal.disabled = true;
-		mergeOn.disabled = true;
-		mergeOff.disabled = true;
-	};
-	const enable = () => {
-		advanced.disabled = false;
-		normal.disabled = false;
-		mergeOn.disabled = false;
-		mergeOff.disabled = false;
-	};
-	if (isAdvancedMode()) {
-		advanced.checked = true;
-		advancedSettings.style.display = "block";
-	} else {
-		normal.checked = true;
-		advancedSettings.style.display = "none";
-	}
-	if (isMergeMode()) mergeOn.checked = true;
-	else mergeOff.checked = true;
-	advanced.addEventListener("change", () => {
-		logInfo(MODULE$3, "setting changed: download mode -> advanced");
-		localStorage.bilibili_helper_download_mode = "advanced";
-		advancedSettings.style.display = "block";
-		buildLinks();
-	});
-	normal.addEventListener("change", () => {
-		logInfo(MODULE$3, "setting changed: download mode -> normal");
-		localStorage.bilibili_helper_download_mode = "normal";
-		advancedSettings.style.display = "none";
-		buildLinks();
-	});
-	mergeOn.addEventListener("change", () => {
-		logInfo(MODULE$3, "setting changed: merge mode -> on");
-		localStorage.bilibili_helper_merge_mode = "on";
-		buildLinks();
-	});
-	mergeOff.addEventListener("change", () => {
-		logInfo(MODULE$3, "setting changed: merge mode -> off");
-		localStorage.bilibili_helper_merge_mode = "off";
-		buildLinks();
-	});
-	durlsEl.addEventListener("click", (e) => {
-		const target = e.target;
-		if (target.tagName.toLowerCase() !== "a") return;
-		const anchor = target;
-		if (anchor.getAttribute("mode") !== "advanced") return;
-		if (anchor.classList.contains("disabled")) return;
-		e.preventDefault();
-		e.stopPropagation();
-		const filename = anchor.getAttribute("title") ?? "download";
-		if (anchor.getAttribute("merge") === "on") {
-			logInfo(MODULE$3, "download click: merge mode", { filename });
-			const durlsAttr = anchor.getAttribute("durls");
-			if (!durlsAttr) return;
-			const progressEl = shadow.querySelector(`ul[durls="${CSS.escape(durlsAttr)}"]`);
-			const segments = JSON.parse(decodeURIComponent(durlsAttr));
-			disable();
-			downloadAndMerge(anchor, segments, filename, progressEl).then(enable).catch((err) => {
-				logError(MODULE$3, "downloadAndMerge failed", err);
-				enable();
-			});
-		} else {
-			logInfo(MODULE$3, "download click: single mode", { filename });
-			const durlAttr = anchor.getAttribute("durl");
-			if (!durlAttr) return;
-			const progressEl = shadow.querySelector(`span[durl="${CSS.escape(durlAttr)}"]`);
-			const segment = JSON.parse(decodeURIComponent(durlAttr));
-			disable();
-			downloadSingle(anchor, segment, filename, progressEl).then(enable).catch((err) => {
-				logError(MODULE$3, "downloadSingle failed", err);
-				enable();
-			});
-		}
-	});
-	toggle.addEventListener("click", () => {
-		if (isHidden()) {
-			logInfo(MODULE$3, "toggle: show UI");
-			localStorage.bilibili_helper_show = "show";
-			content.classList.remove("hide");
-			toggle.innerHTML = "收起";
-			contentHost?.classList.remove("hide");
-			actions.style.top = "0";
-			shadow.getElementById("notice-frame")?.contentWindow?.postMessage({ action: "getHeight" }, "https://csser.top");
-		} else {
-			logInfo(MODULE$3, "toggle: hide UI");
-			localStorage.bilibili_helper_show = "hide";
-			content.classList.add("hide");
-			contentHost?.classList.add("hide");
-			toggle.innerHTML = "打开B站下载助手";
-			actions.style.top = "0";
-		}
-	});
-	if (contentHost) contentHost.addEventListener("scroll", () => {
-		actions.style.top = contentHost.scrollTop + "px";
-	});
-}
-function setupNotice(shadow) {
-	const iframe = shadow.getElementById("notice-frame");
-	if (!iframe) return;
-	iframe.onload = () => {
-		logInfo(MODULE$3, "notice iframe loaded");
-		iframe.contentWindow?.postMessage({ action: "getHeight" }, "https://csser.top");
-		const internals = getInternals();
-		iframe.contentWindow?.postMessage({
-			action: "setVersion",
-			version: {
-				name: internals.name,
-				code: parseInt(internals.version.replace(/\./g, ""), 10)
-			}
-		}, "https://csser.top");
-		iframe.contentWindow?.postMessage({
-			action: "setTheme",
-			theme: "null"
-		}, "https://csser.top");
-	};
-	window.addEventListener("message", (e) => {
-		if (e.origin !== "https://csser.top" || !e.data) return;
-		if (e.data.action === "reportHeight") iframe.style.height = e.data.height + 10 + "px";
-	});
-	iframe.src = `https://csser.top/bilibili/notice.html?t=${Date.now()}`;
-	window.addEventListener("resize", () => {
-		iframe.contentWindow?.postMessage({ action: "getHeight" }, "https://csser.top");
-	});
-}
 /**
-* Update or create the host UI element with the given download info.
+* Show or update the download info. If the button doesn't exist yet, inject it.
 */
 function showDownloadInfo(info, loading = false) {
 	logInfo(MODULE$3, "showDownloadInfo", {
@@ -5293,102 +5138,40 @@ function showDownloadInfo(info, loading = false) {
 		hasDurl: !!info.durl,
 		loading
 	});
-	const el = document.getElementById(HOST_ELEMENT_ID);
-	const hostStyles = `display:block;overflow:auto;position:fixed;z-index:${Number.MAX_SAFE_INTEGER};bottom:0;left:0;right:0;max-height:50%;width:100%;background: #fff;border-top: 1px solid #ccc;box-shadow: rgba(0, 0, 0, 0.2) 0 -5px 10px;`;
-	if (el) {
-		shadowRoot = el.shadowRoot;
-		const titleEl = shadowRoot.getElementById("title");
-		titleEl.innerHTML = loading ? "加载中" + LOADING_SPINNER : titleHtml(info);
-		const durlsEl = shadowRoot.getElementById("durls");
-		durlsEl.innerHTML = loading ? "" : linksHtml(info);
-		const styleEl = shadowRoot.getElementById("d-style");
-		styleEl.textContent = !info.dash && info.durl ? "#setting-advanced{display:none!important}" : "";
-	} else {
-		hostElement = document.createElement("div");
-		hostElement.id = HOST_ELEMENT_ID;
-		hostElement.style.cssText = hostStyles;
-		if (isHidden()) hostElement.classList.add("hide");
-		document.body.appendChild(hostElement);
-		shadowRoot = hostElement.attachShadow({ mode: "open" });
-		shadowRoot.innerHTML = `
-      <style>${SHADOW_STYLES}
-        #${CSS.escape(HOST_ELEMENT_ID)}.hide{
-          width:auto!important;
-          left:auto!important;
-          background:transparent!important;
-          border:0 none!important;
-          border-radius: 6px 0 0 0;
-          box-shadow: rgba(0, 0, 0, 0.2) -5px -5px 10px!important;
-        }
-        .player-fullscreen-fix #${CSS.escape(HOST_ELEMENT_ID)} {
-          z-index: 9!important;
-        }
-      </style>
-      <div id="content" ${isHidden() ? "class=\"hide\"" : ""}>
-        <div id="side-bar">
-          <div class="notice">
-            <iframe id="notice-frame" frameborder="0"></iframe>
-          </div>
-        </div>
-        <div id="main">
-          <style id="d-style">${!info.dash && info.durl ? "#setting-advanced{display:none!important}" : ""}</style>
-          ${SETTINGS_HTML}
-          <h3 id="title">${loading ? "加载中" + LOADING_SPINNER : titleHtml(info)}</h3>
-          <ul id="durls">
-            ${loading ? "" : linksHtml(info)}
-          </ul>
-          <div class="beg">
-            <p>
-              如果这个工具确实帮到了您，烦请给个五星好评，谢谢😊
-              <a class="btn" href="${getReviewUrl()}" target="_blank">去评价</a>
-            </p>
-          </div>
-          <div id="bilibliHelperLogs">
-            <h4>解析日志：</h4>
-          </div>
-        </div>
-        <div id="actions">
-          <button id="toggle" class="btn-large">${isHidden() ? "打开B站下载助手" : "收起"}</button>
-        </div>
-      </div>
-    `;
-		setupSettings(shadowRoot, () => {
-			const durlsEl = shadowRoot.getElementById("durls");
-			durlsEl.innerHTML = linksHtml(info);
-		});
-		setupNotice(shadowRoot);
+	if (loading) {
+		cachedInfo = null;
+		return;
 	}
+	cachedInfo = info;
+	ensureButton();
+	if (popupEl) rebuildPopupLinks();
 }
 /**
-* Append a log message to the host UI's log panel.
+* Append a log message to the console (and popup if open).
 */
 function log(...args) {
 	console.log("[bilibili downloader]", "[host]", ...args);
+	const logsEl = popupEl?.querySelector("#bilibili-helper-popup-logs");
+	if (logsEl) {
+		const line = args.map((a) => typeof a === "object" ? safeJson(a) : String(a)).join(" ");
+		logsEl.innerHTML += `<div>${escapeHtml(line)}</div>`;
+		logsEl.scrollTop = logsEl.scrollHeight;
+	}
+}
+function safeJson(a) {
 	try {
-		const el = document.getElementById(HOST_ELEMENT_ID);
-		if (!el) return;
-		const logs = el.shadowRoot?.querySelector("#bilibliHelperLogs");
-		if (!logs) return;
-		const line = args.map((a) => {
-			if (typeof a === "object") try {
-				return JSON.stringify(a);
-			} catch {
-				return String(a);
-			}
-			return String(a);
-		}).join(" ");
-		logs.innerHTML += `<p>${line}</p>`;
-	} catch {}
+		return JSON.stringify(a);
+	} catch {
+		return String(a);
+	}
 }
 /**
 * Clear log panel.
 */
 function clearLogs() {
 	logInfo(MODULE$3, "logs cleared");
-	const el = document.getElementById(HOST_ELEMENT_ID);
-	if (!el) return;
-	const logs = el.shadowRoot?.querySelector("#bilibliHelperLogs");
-	if (logs) logs.innerHTML = "";
+	const logsEl = popupEl?.querySelector("#bilibili-helper-popup-logs");
+	if (logsEl) logsEl.innerHTML = "";
 }
 //#endregion
 //#region __vite-browser-external
@@ -6641,20 +6424,20 @@ async function fetchInitialState(mode = "next") {
 				};
 			}
 		}
+		const pageState = window.__INITIAL_STATE__;
+		if (pageState && pageState.videoData) {
+			logInfo(MODULE, "using __INITIAL_STATE__ from window");
+			return {
+				code: 0,
+				data: pageState
+			};
+		}
 		const playinfo = window.__playinfo__;
 		if (playinfo?.data) {
 			logInfo(MODULE, "using __playinfo__ from window");
 			return {
 				code: 0,
 				data: playinfo.data
-			};
-		}
-		const pageState = window.__INITIAL_STATE__;
-		if (pageState) {
-			logInfo(MODULE, "using __INITIAL_STATE__ from window");
-			return {
-				code: 0,
-				data: pageState
 			};
 		}
 		const hydrateData = window.__PLAYURL_HYDRATE_DATA__;
@@ -7023,6 +6806,19 @@ function interceptXMLHttpRequest(onPlayUrl, originalXHR, onReady) {
 }
 function startWatching(onChange, timer) {
 	logInfo(MODULE, "startWatching: setting up quality and URL change observers");
+	let lastUrl = window.location.href;
+	timer.interval = window.setInterval(() => {
+		const currentUrl = window.location.href;
+		if (currentUrl !== lastUrl) {
+			logInfo(MODULE, "URL change detected", {
+				from: lastUrl,
+				to: currentUrl
+			});
+			lastUrl = currentUrl;
+			clearLogs();
+			window.setTimeout(onChange, 0);
+		}
+	}, 1e3);
 	waitForElement(".bpx-player-ctrl-quality-result").then((el) => {
 		if (!el) {
 			logWarn(MODULE, "startWatching: quality label element not found");
@@ -7043,18 +6839,6 @@ function startWatching(onChange, timer) {
 			}
 		}).observe(el, { childList: true });
 	});
-	timer.interval = window.setInterval(() => {
-		const currentUrl = window.location.href;
-		if (appState.interval !== 0) {
-			if (currentUrl !== appState._lastUrl) logInfo(MODULE, "URL change detected", {
-				from: appState._lastUrl,
-				to: currentUrl
-			});
-			clearLogs();
-			appState.interval = window.setTimeout(onChange, 0);
-		}
-		appState._lastUrl = currentUrl;
-	}, 1e3);
 }
 (async function main(win) {
 	logInfo(MODULE, "content script starting", {
@@ -7067,7 +6851,6 @@ function startWatching(onChange, timer) {
 			logWarn(MODULE, "refresh: not on bilibili.com, skipping");
 			return;
 		}
-		showDownloadInfo({ code: ErrorCode.OK }, true);
 		if (isVideoPage()) {
 			logInfo(MODULE, "page type: video (UGC)");
 			await processVideoPage();

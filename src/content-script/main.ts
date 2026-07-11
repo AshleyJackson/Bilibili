@@ -29,7 +29,7 @@ import { showDownloadInfo, log, clearLogs } from '$lib/host';
 import { mergeAudioVideo, setupCleanup, trackBlobUrl } from '$lib/ffmpeg';
 import { downloadBlob } from '$lib/utils';
 import type { PlayUrlResult } from '$lib/bilibili-api';
-import { fetchUgcPlayUrl, fetchBangumiPlayUrl, fetchPageState } from '$lib/bilibili-api';
+import { fetchUgcPlayUrl, fetchBangumiPlayUrl } from '$lib/bilibili-api';
 import { logInfo, logWarn, logError } from '$lib/logger';
 
 const MODULE = 'main';
@@ -107,18 +107,18 @@ async function fetchInitialState(mode: 'next' | 'next2025' = 'next'): Promise<{
 			}
 		}
 
+		// Try __INITIAL_STATE__ from the page context (contains videoData with aid/bvid/cid/title)
+		const pageState = (window as unknown as Record<string, unknown>).__INITIAL_STATE__;
+		if (pageState && (pageState as Record<string, unknown>).videoData) {
+			logInfo(MODULE, 'using __INITIAL_STATE__ from window');
+			return { code: 0, data: pageState };
+		}
+
 		// Try __playinfo__ from the page context (contains playurl dash/durl data)
 		const playinfo = (window as unknown as { __playinfo__?: { data?: unknown } }).__playinfo__;
 		if (playinfo?.data) {
 			logInfo(MODULE, 'using __playinfo__ from window');
 			return { code: 0, data: playinfo.data };
-		}
-
-		// Try __INITIAL_STATE__ from the page context (contains video metadata like aid/bvid/cid/title)
-		const pageState = (window as unknown as Record<string, unknown>).__INITIAL_STATE__;
-		if (pageState) {
-			logInfo(MODULE, 'using __INITIAL_STATE__ from window');
-			return { code: 0, data: pageState };
 		}
 
 		// Try __PLAYURL_HYDRATE_DATA__ from the page context
@@ -482,6 +482,18 @@ function startWatching(
 ): void {
 	logInfo(MODULE, 'startWatching: setting up quality and URL change observers');
 
+	// Monitor URL/page changes — only fire if URL actually changed
+	let lastUrl = window.location.href;
+	timer.interval = window.setInterval(() => {
+		const currentUrl = window.location.href;
+		if (currentUrl !== lastUrl) {
+			logInfo(MODULE, 'URL change detected', { from: lastUrl, to: currentUrl });
+			lastUrl = currentUrl;
+			clearLogs();
+			window.setTimeout(onChange, 0);
+		}
+	}, 1000);
+
 	// Monitor quality label changes
 	waitForElement('.bpx-player-ctrl-quality-result').then((el) => {
 		if (!el) {
@@ -501,20 +513,6 @@ function startWatching(
 			}
 		}).observe(el, { childList: true });
 	});
-
-	// Monitor URL/page changes
-	timer.interval = window.setInterval(() => {
-		const currentUrl = window.location.href;
-		if (appState.interval !== 0) {
-			const urlChanged = currentUrl !== (appState as unknown as Record<string, unknown>)._lastUrl;
-			if (urlChanged) {
-				logInfo(MODULE, 'URL change detected', { from: (appState as unknown as Record<string, unknown>)._lastUrl, to: currentUrl });
-			}
-			clearLogs();
-			appState.interval = window.setTimeout(onChange, 0);
-		}
-		(appState as unknown as Record<string, unknown>)._lastUrl = currentUrl;
-	}, 1000);
 }
 
 // ── Entry point ──
@@ -528,8 +526,6 @@ function startWatching(
 			logWarn(MODULE, 'refresh: not on bilibili.com, skipping');
 			return;
 		}
-
-		showDownloadInfo({ code: ErrorCode.OK }, true);
 
 		if (isVideoPage()) {
 			logInfo(MODULE, 'page type: video (UGC)');
