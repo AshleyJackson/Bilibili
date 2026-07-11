@@ -111,7 +111,7 @@ async function fetchInitialState(mode: 'next' | 'next2025' = 'next'): Promise<{
 		logInfo(MODULE, 'page HTML fetched', { length: html.length });
 
 		// Try next2025 format
-		const next2025Match = html.match(/<script>window\.__INITIAL_STATE__=(.+?)<\/script>/);
+		const next2025Match = html.match(/<script>window\.__INITIAL_STATE__=([\s\S]+?)<\/script>/);
 		if (next2025Match) {
 			const raw = next2025Match[1].replace(
 				/;\(function\(\)\{var s;\(s=document\.currentScript\|\|document\.scripts\[document\.scripts\.length-1\]\)\.parentNode\.removeChild\(s\);\}\)\(\);/,
@@ -123,7 +123,7 @@ async function fetchInitialState(mode: 'next' | 'next2025' = 'next'): Promise<{
 
 		// Try __NEXT_DATA__ format
 		const nextDataMatch = html.match(
-			/<script id="__NEXT_DATA__" type="application\/json">(.+?)<\/script>/
+			/<script id="__NEXT_DATA__" type="application\/json">([\s\S]+?)<\/script>/
 		);
 		if (nextDataMatch) {
 			const nextData = JSON.parse(nextDataMatch[1]);

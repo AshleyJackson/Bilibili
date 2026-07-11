@@ -64,7 +64,7 @@ const VideoInfoResultSchema = z.object({
 export function detectBangumiPage(html: string, mode: 'next' | 'next2025'): ApiResult | null {
 	try {
 		if (mode === 'next2025') {
-			const match = html.match(/<script>window\.__INITIAL_STATE__=(.+?)<\/script>/);
+			const match = html.match(/<script>window\.__INITIAL_STATE__=([\s\S]+?)<\/script>/);
 			if (!match) {
 				logInfo(MODULE, 'detectBangumiPage(next2025): no __INITIAL_STATE__ found');
 				return null;
@@ -79,7 +79,7 @@ export function detectBangumiPage(html: string, mode: 'next' | 'next2025'): ApiR
 		}
 
 		const match = html.match(
-			/<script id="__NEXT_DATA__" type="application\/json">(.+?)<\/script>/
+			/<script id="__NEXT_DATA__" type="application\/json">([\s\S]+?)<\/script>/
 		);
 		if (!match) {
 			logInfo(MODULE, 'detectBangumiPage(next): no __NEXT_DATA__ found');
@@ -107,7 +107,7 @@ export function extractInitialState(
 ): { code: number; data?: unknown; message?: string } {
 	// Try next2025 format
 	try {
-		const match = html.match(/<script>window\.__INITIAL_STATE__=(.+?)<\/script>/);
+		const match = html.match(/<script>window\.__INITIAL_STATE__=([\s\S]+?)<\/script>/);
 		if (match) {
 			const raw = match[1].replace(
 				/;\(function\(\)\{var s;\(s=document\.currentScript\|\|document\.scripts\[document\.scripts\.length-1\]\)\.parentNode\.removeChild\(s\);\}\)\(\);/,
@@ -123,7 +123,7 @@ export function extractInitialState(
 	// Try __NEXT_DATA__ format
 	try {
 		const match = html.match(
-			/<script id="__NEXT_DATA__" type="application\/json">(.+?)<\/script>/
+			/<script id="__NEXT_DATA__" type="application\/json">([\s\S]+?)<\/script>/
 		);
 		if (match) {
 			const nextData = JSON.parse(match[1]);

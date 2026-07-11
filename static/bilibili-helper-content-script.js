@@ -6643,7 +6643,7 @@ async function fetchInitialState(mode = "next") {
 		}
 		const html = await (await window.fetch(window.location.href, FETCH_DEFAULTS)).text();
 		logInfo(MODULE, "page HTML fetched", { length: html.length });
-		const next2025Match = html.match(/<script>window\.__INITIAL_STATE__=(.+?)<\/script>/);
+		const next2025Match = html.match(/<script>window\.__INITIAL_STATE__=([\s\S]+?)<\/script>/);
 		if (next2025Match) {
 			const raw = next2025Match[1].replace(/;\(function\(\)\{var s;\(s=document\.currentScript\|\|document\.scripts\[document\.scripts\.length-1\]\)\.parentNode\.removeChild\(s\);\}\)\(\);/, "");
 			logInfo(MODULE, "found __INITIAL_STATE__ (next2025)");
@@ -6652,7 +6652,7 @@ async function fetchInitialState(mode = "next") {
 				data: JSON.parse(raw)
 			};
 		}
-		const nextDataMatch = html.match(/<script id="__NEXT_DATA__" type="application\/json">(.+?)<\/script>/);
+		const nextDataMatch = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]+?)<\/script>/);
 		if (nextDataMatch) {
 			const state = JSON.parse(nextDataMatch[1]).props.pageProps.dehydratedState.queries[0].state;
 			logInfo(MODULE, "found __NEXT_DATA__ (next format)", { status: state.status });
