@@ -4,7 +4,8 @@ import {
 	getMixinKey,
 	encodeWbiValue,
 	encWbi,
-	extractKeysFromNav
+	extractKeysFromNav,
+	tryExtractKeysFromPage
 } from './wbi';
 
 // Documented test vectors from SocialSisterYi/bilibili-API-collect (maintained fork).
@@ -113,5 +114,36 @@ describe('extractKeysFromNav', () => {
 	it('returns null when fields are missing', () => {
 		expect(extractKeysFromNav({})).toBeNull();
 		expect(extractKeysFromNav({ wbi_img: {} })).toBeNull();
+	});
+});
+
+describe('tryExtractKeysFromPage', () => {
+	const mockWindow = (state: unknown) =>
+		vi.stubGlobal('window', { __INITIAL_STATE__: state } as unknown as Window & typeof globalThis);
+
+	beforeEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it('extracts WBI keys from window.__INITIAL_STATE__', () => {
+		mockWindow({
+			wbi_img: {
+				img_url: 'https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png',
+				sub_url: 'https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png'
+			}
+		});
+		const result = tryExtractKeysFromPage();
+		expect(result).toEqual({ imgKey: IMG_KEY, subKey: SUB_KEY });
+	});
+
+	it('returns null when __INITIAL_STATE__ is missing wbi_img', () => {
+		mockWindow({});
+		expect(tryExtractKeysFromPage()).toBeNull();
+	});
+
+	it('returns null when __INITIAL_STATE__ is not present', () => {
+		// window exists but no __INITIAL_STATE__
+		vi.stubGlobal('window', {} as Window & typeof globalThis);
+		expect(tryExtractKeysFromPage()).toBeNull();
 	});
 });

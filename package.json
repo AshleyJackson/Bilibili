@@ -4,8 +4,8 @@
 	"private": true,
 	"scripts": {
 		"dev": "vite dev",
-		"build:content": "svelte-kit sync && vite build --config vite.content.config.ts --mode seed && vite build --config vite.content.config.ts --mode main",
-		"build": "vite build && cp node_modules/@ffmpeg/core/dist/umd/ffmpeg-core.{js,wasm} build/",
+		"build:content": "svelte-kit sync && vite build --config vite.content.config.ts --mode seed && vite build --config vite.content.config.ts --mode main && cp node_modules/@ffmpeg/core/dist/esm/ffmpeg-core.{js,wasm} static/",
+		"build": "vite build && cp node_modules/@ffmpeg/core/dist/esm/ffmpeg-core.{js,wasm} build/",
 		"build:all": "bun run build:content && bun run build",
 		"preview": "vite preview",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",

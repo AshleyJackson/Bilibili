@@ -14,7 +14,6 @@ var QUALITY_LABELS = {
 var FFMPEG_WORKER = "ffmpeg.worker.js";
 var FFMPEG_CORE_JS = "ffmpeg-core.js";
 var FFMPEG_CORE_WASM = "ffmpeg-core.wasm";
-var FFMPEG_CORE_WORKER = "ffmpeg-core.worker.js";
 var UGC_PLAY_URL_API = "https://api.bilibili.com/x/player/wbi/playurl";
 var BANGUMI_PLAY_URL_API = "https://api.bilibili.com/pgc/player/web/v2/playurl";
 var NAV_API = "https://api.bilibili.com/x/web-interface/nav";
@@ -3230,7 +3229,7 @@ var parse = /* @__PURE__ */ _parse(ZodRealError);
 var parseAsync = /* @__PURE__ */ _parseAsync(ZodRealError);
 var safeParse = /* @__PURE__ */ _safeParse(ZodRealError);
 var safeParseAsync = /* @__PURE__ */ _safeParseAsync(ZodRealError);
-var encode = /* @__PURE__ */ _encode(ZodRealError);
+var encode$1 = /* @__PURE__ */ _encode(ZodRealError);
 var decode = /* @__PURE__ */ _decode(ZodRealError);
 var encodeAsync = /* @__PURE__ */ _encodeAsync(ZodRealError);
 var decodeAsync = /* @__PURE__ */ _decodeAsync(ZodRealError);
@@ -3291,7 +3290,7 @@ var ZodType = /*@__PURE__*/ $constructor("ZodType", (inst, def) => {
 	inst.parseAsync = async (data, params) => parseAsync(inst, data, params, { callee: inst.parseAsync });
 	inst.safeParseAsync = async (data, params) => safeParseAsync(inst, data, params);
 	inst.spa = inst.safeParseAsync;
-	inst.encode = (data, params) => encode(inst, data, params);
+	inst.encode = (data, params) => encode$1(inst, data, params);
 	inst.decode = (data, params) => decode(inst, data, params);
 	inst.encodeAsync = async (data, params) => encodeAsync(inst, data, params);
 	inst.decodeAsync = async (data, params) => decodeAsync(inst, data, params);
@@ -4133,263 +4132,6 @@ function downloadBlob(data, filename, container, onDone) {
 	anchor.click();
 	onDone?.();
 }
-//#endregion
-//#region src/lib/logger.ts
-var LEVEL_PREFIX = {
-	info: "",
-	warn: "[WARN]",
-	error: "[ERROR]"
-};
-/**
-* Format a UTC timestamp for log messages.
-* Returns "HH:MM:SS.mmm" so multiple messages in the same second are distinguishable.
-*/
-function timestamp() {
-	const d = /* @__PURE__ */ new Date();
-	return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0") + ":" + String(d.getSeconds()).padStart(2, "0") + "." + String(d.getMilliseconds()).padStart(3, "0");
-}
-/** Map a severity level to the appropriate console method. */
-var consoleMethod = {
-	info: console.log,
-	warn: console.warn,
-	error: console.error
-};
-/**
-* Core log function.
-*
-* @param module  Short module identifier, e.g. "api", "download", "ffmpeg", "wbi", "fetch", "host", "main".
-* @param level   Severity level.
-* @param args    One or more values to log.
-*/
-function log$1(module, level, ...args) {
-	const prefix = `[${timestamp()}][${module}]${LEVEL_PREFIX[level] ? " " + LEVEL_PREFIX[level] : ""}`;
-	consoleMethod[level]("[bilibili downloader]", prefix, ...args);
-	try {
-		const el = document.getElementById("bilibili-helper-host");
-		if (!el?.shadowRoot) return;
-		const logs = el.shadowRoot.querySelector("#bilibliHelperLogs");
-		if (!logs) return;
-		const line = args.map((a) => {
-			if (typeof a === "object") try {
-				return JSON.stringify(a);
-			} catch {
-				return String(a);
-			}
-			return String(a);
-		}).join(" ");
-		logs.innerHTML += `<p>${prefix} ${line}</p>`;
-	} catch {}
-}
-function logInfo(module, ...args) {
-	log$1(module, "info", ...args);
-}
-function logWarn(module, ...args) {
-	log$1(module, "warn", ...args);
-}
-function logError(module, ...args) {
-	log$1(module, "error", ...args);
-}
-/**
-* Convenience: log a fetch attempt including URL method, status code, and duration.
-*
-* Call immediately before fetch, then invoke the returned function with the response
-* (or null on error).
-*/
-function logFetch(module, url, method) {
-	const start = performance.now();
-	const short = url.length > 120 ? url.slice(0, 120) + "..." : url;
-	logInfo(module, `${method} ${short}`);
-	return (res) => {
-		const ms = Math.round(performance.now() - start);
-		if (res) logInfo(module, `${method} ${res.status} in ${ms}ms (${short})`);
-		else logError(module, `${method} failed after ${ms}ms (${short})`);
-	};
-}
-//#endregion
-//#region src/lib/fetch-utils.ts
-var MODULE$5 = "fetch";
-/**
-* Fetch a URL and return its contents as an ArrayBuffer.
-* Supports progress callbacks via streaming.
-*/
-async function fetchWithProgress(url, onProgress) {
-	const response = await fetch(url, STREAM_FETCH_DEFAULTS);
-	let result;
-	try {
-		const contentLength = parseInt(response.headers.get("Content-Length") ?? "-1", 10);
-		if (contentLength > 0) logInfo(MODULE$5, "fetchWithProgress: streaming", {
-			url: url.slice(0, 80),
-			contentLength
-		});
-		const reader = response.body?.getReader();
-		if (!reader) throw new Error("failed to get response body reader");
-		const chunks = [];
-		let received = 0;
-		for (;;) {
-			const { done, value } = await reader.read();
-			const delta = value ? value.length : 0;
-			if (done) {
-				if (contentLength !== -1 && contentLength !== received) throw new Error("failed to complete download");
-				onProgress?.({
-					url,
-					total: contentLength,
-					received,
-					delta,
-					done: true
-				});
-				break;
-			}
-			chunks.push(value);
-			received += delta;
-			onProgress?.({
-				url,
-				total: contentLength,
-				received,
-				delta,
-				done: false
-			});
-		}
-		const merged = new Uint8Array(received);
-		let offset = 0;
-		for (const chunk of chunks) {
-			merged.set(chunk, offset);
-			offset += chunk.length;
-		}
-		result = merged.buffer;
-	} catch (err) {
-		logWarn(MODULE$5, "streaming failed, falling back to arrayBuffer", err);
-		result = await response.arrayBuffer();
-		onProgress?.({
-			url,
-			total: result.byteLength,
-			received: result.byteLength,
-			delta: 0,
-			done: true
-		});
-	}
-	return result;
-}
-/**
-* Fetch and return as a Blob, optionally streaming with progress.
-*/
-async function fetchAsBlob(url, mimeType, streaming = false, onProgress) {
-	logInfo(MODULE$5, "fetchAsBlob", {
-		url: url.slice(0, 80),
-		mimeType,
-		streaming
-	});
-	const data = streaming ? await fetchWithProgress(url, onProgress) : await (await fetch(url, STREAM_FETCH_DEFAULTS)).arrayBuffer();
-	const blob = new Blob([data], { type: mimeType });
-	const blobUrl = URL.createObjectURL(blob);
-	logInfo(MODULE$5, "fetchAsBlob: blob created", {
-		blobUrl: blobUrl.slice(0, 40),
-		size: data.byteLength
-	});
-	return blobUrl;
-}
-/**
-* Stream a download with progress updates and return the Blob.
-*/
-async function streamDownload(url, expectedSize, onProgress) {
-	logInfo(MODULE$5, "streamDownload: start", {
-		url: url.slice(0, 80),
-		expectedSize
-	});
-	const response = await window.fetch(url, STREAM_FETCH_DEFAULTS);
-	if (!response.ok) {
-		logError(MODULE$5, "streamDownload: HTTP error", {
-			url: url.slice(0, 80),
-			status: response.status,
-			statusText: response.statusText
-		});
-		throw new Error(`HTTP ${response.status} ${response.statusText}`);
-	}
-	const contentLength = expectedSize ?? parseInt(response.headers.get("content-length") ?? "0", 10);
-	let received = 0;
-	const reader = response.body.getReader();
-	const buffer = await new Response(new ReadableStream({ start(controller) {
-		const pump = () => {
-			reader.read().then(({ done, value }) => {
-				if (done) {
-					controller.close();
-					return;
-				}
-				received += value.byteLength;
-				onProgress(received, contentLength);
-				controller.enqueue(value);
-				pump();
-			}).catch((err) => controller.error(err));
-		};
-		pump();
-	} })).arrayBuffer();
-	const blob = new Blob([buffer]);
-	logInfo(MODULE$5, "streamDownload: complete", {
-		url: url.slice(0, 80),
-		received,
-		blobSize: blob.size
-	});
-	return blob;
-}
-/**
-* Convert various input types to Uint8Array.
-*/
-async function toUint8Array(input) {
-	if (typeof input === "string") {
-		const match = /data:([a-zA-Z]+\/[a-zA-Z0-9.+-]+);base64,(.*)/.exec(input);
-		if (match) {
-			const binary = atob(match[2]);
-			const bytes = new Uint8Array(binary.length);
-			for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-			logInfo(MODULE$5, "toUint8Array: decoded base64 data URI", { size: bytes.length });
-			return bytes;
-		}
-		const done = logFetch(MODULE$5, input.slice(0, 120), "GET");
-		let response;
-		try {
-			response = await fetch(input, STREAM_FETCH_DEFAULTS);
-		} catch (err) {
-			done(null);
-			throw err;
-		}
-		done(response);
-		const buf = await response.arrayBuffer();
-		logInfo(MODULE$5, "toUint8Array: fetched", { size: buf.byteLength });
-		return new Uint8Array(buf);
-	}
-	if (input instanceof URL) {
-		const done = logFetch(MODULE$5, input.toString(), "GET");
-		let response;
-		try {
-			response = await fetch(input, STREAM_FETCH_DEFAULTS);
-		} catch (err) {
-			done(null);
-			throw err;
-		}
-		done(response);
-		const buf = await response.arrayBuffer();
-		logInfo(MODULE$5, "toUint8Array: fetched URL", { size: buf.byteLength });
-		return new Uint8Array(buf);
-	}
-	logInfo(MODULE$5, "toUint8Array: reading File/Blob", {
-		type: input.type,
-		size: input.size
-	});
-	return fileToUint8Array(input);
-}
-function fileToUint8Array(file) {
-	return new Promise((resolve, reject) => {
-		const reader = new FileReader();
-		reader.onload = () => {
-			const { result } = reader;
-			if (result instanceof ArrayBuffer) resolve(new Uint8Array(result));
-			else resolve(/* @__PURE__ */ new Uint8Array());
-		};
-		reader.onerror = (ev) => {
-			reject(Error(`File could not be read! Code=${(ev?.target?.error)?.code ?? -1}`));
-		};
-		reader.readAsArrayBuffer(file);
-	});
-}
 var FFMessageType;
 (function(FFMessageType) {
 	FFMessageType["LOAD"] = "LOAD";
@@ -4717,6 +4459,220 @@ var FFFSType;
 	FFFSType["PROXYFS"] = "PROXYFS";
 })(FFFSType || (FFFSType = {}));
 //#endregion
+//#region src/lib/logger.ts
+var LEVEL_PREFIX = {
+	info: "",
+	warn: "[WARN]",
+	error: "[ERROR]"
+};
+/**
+* Format a UTC timestamp for log messages.
+* Returns "HH:MM:SS.mmm" so multiple messages in the same second are distinguishable.
+*/
+function timestamp() {
+	const d = /* @__PURE__ */ new Date();
+	return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0") + ":" + String(d.getSeconds()).padStart(2, "0") + "." + String(d.getMilliseconds()).padStart(3, "0");
+}
+/** Map a severity level to the appropriate console method. */
+var consoleMethod = {
+	info: console.log,
+	warn: console.warn,
+	error: console.error
+};
+/**
+* Core log function.
+*
+* @param module  Short module identifier, e.g. "api", "download", "ffmpeg", "wbi", "fetch", "host", "main".
+* @param level   Severity level.
+* @param args    One or more values to log.
+*/
+function log$1(module, level, ...args) {
+	const prefix = `[${timestamp()}][${module}]${LEVEL_PREFIX[level] ? " " + LEVEL_PREFIX[level] : ""}`;
+	consoleMethod[level]("[bilibili downloader]", prefix, ...args);
+	try {
+		const el = document.getElementById("bilibili-helper-host");
+		if (!el?.shadowRoot) return;
+		const logs = el.shadowRoot.querySelector("#bilibliHelperLogs");
+		if (!logs) return;
+		const line = args.map((a) => {
+			if (typeof a === "object") try {
+				return JSON.stringify(a);
+			} catch {
+				return String(a);
+			}
+			return String(a);
+		}).join(" ");
+		logs.innerHTML += `<p>${prefix} ${line}</p>`;
+	} catch {}
+}
+function logInfo(module, ...args) {
+	log$1(module, "info", ...args);
+}
+function logWarn(module, ...args) {
+	log$1(module, "warn", ...args);
+}
+function logError(module, ...args) {
+	log$1(module, "error", ...args);
+}
+/**
+* Convenience: log a fetch attempt including URL method, status code, and duration.
+*
+* Call immediately before fetch, then invoke the returned function with the response
+* (or null on error).
+*/
+function logFetch(module, url, method) {
+	const start = performance.now();
+	const short = url.length > 120 ? url.slice(0, 120) + "..." : url;
+	logInfo(module, `${method} ${short}`);
+	return (res) => {
+		const ms = Math.round(performance.now() - start);
+		if (res) logInfo(module, `${method} ${res.status} in ${ms}ms (${short})`);
+		else logError(module, `${method} failed after ${ms}ms (${short})`);
+	};
+}
+//#endregion
+//#region src/lib/fetch-utils.ts
+var MODULE$6 = "fetch";
+/**
+* Fetch a URL and return its contents as an ArrayBuffer.
+* Supports progress callbacks via streaming.
+*/
+async function fetchWithProgress(url, onProgress) {
+	const response = await fetch(url, STREAM_FETCH_DEFAULTS);
+	let result;
+	try {
+		const contentLength = parseInt(response.headers.get("Content-Length") ?? "-1", 10);
+		if (contentLength > 0) logInfo(MODULE$6, "fetchWithProgress: streaming", {
+			url: url.slice(0, 80),
+			contentLength
+		});
+		const reader = response.body?.getReader();
+		if (!reader) throw new Error("failed to get response body reader");
+		const chunks = [];
+		let received = 0;
+		for (;;) {
+			const { done, value } = await reader.read();
+			const delta = value ? value.length : 0;
+			if (done) {
+				if (contentLength !== -1 && contentLength !== received) throw new Error("failed to complete download");
+				onProgress?.({
+					url,
+					total: contentLength,
+					received,
+					delta,
+					done: true
+				});
+				break;
+			}
+			chunks.push(value);
+			received += delta;
+			onProgress?.({
+				url,
+				total: contentLength,
+				received,
+				delta,
+				done: false
+			});
+		}
+		const merged = new Uint8Array(received);
+		let offset = 0;
+		for (const chunk of chunks) {
+			merged.set(chunk, offset);
+			offset += chunk.length;
+		}
+		result = merged.buffer;
+	} catch (err) {
+		logWarn(MODULE$6, "streaming failed, falling back to arrayBuffer", err);
+		result = await response.arrayBuffer();
+		onProgress?.({
+			url,
+			total: result.byteLength,
+			received: result.byteLength,
+			delta: 0,
+			done: true
+		});
+	}
+	return result;
+}
+/**
+* Fetch and return as a Blob, optionally streaming with progress.
+*/
+async function fetchAsBlob(url, mimeType, streaming = false, onProgress) {
+	logInfo(MODULE$6, "fetchAsBlob", {
+		url: url.slice(0, 80),
+		mimeType,
+		streaming
+	});
+	const data = streaming ? await fetchWithProgress(url, onProgress) : await (await fetch(url, STREAM_FETCH_DEFAULTS)).arrayBuffer();
+	const blob = new Blob([data], { type: mimeType });
+	const blobUrl = URL.createObjectURL(blob);
+	logInfo(MODULE$6, "fetchAsBlob: blob created", {
+		blobUrl: blobUrl.slice(0, 40),
+		size: data.byteLength
+	});
+	return blobUrl;
+}
+/**
+* Convert various input types to Uint8Array.
+*/
+async function toUint8Array(input) {
+	if (typeof input === "string") {
+		const match = /data:([a-zA-Z]+\/[a-zA-Z0-9.+-]+);base64,(.*)/.exec(input);
+		if (match) {
+			const binary = atob(match[2]);
+			const bytes = new Uint8Array(binary.length);
+			for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+			logInfo(MODULE$6, "toUint8Array: decoded base64 data URI", { size: bytes.length });
+			return bytes;
+		}
+		const done = logFetch(MODULE$6, input.slice(0, 120), "GET");
+		let response;
+		try {
+			response = await fetch(input, STREAM_FETCH_DEFAULTS);
+		} catch (err) {
+			done(null);
+			throw err;
+		}
+		done(response);
+		const buf = await response.arrayBuffer();
+		logInfo(MODULE$6, "toUint8Array: fetched", { size: buf.byteLength });
+		return new Uint8Array(buf);
+	}
+	if (input instanceof URL) {
+		const done = logFetch(MODULE$6, input.toString(), "GET");
+		let response;
+		try {
+			response = await fetch(input, STREAM_FETCH_DEFAULTS);
+		} catch (err) {
+			done(null);
+			throw err;
+		}
+		done(response);
+		const buf = await response.arrayBuffer();
+		logInfo(MODULE$6, "toUint8Array: fetched URL", { size: buf.byteLength });
+		return new Uint8Array(buf);
+	}
+	logInfo(MODULE$6, "toUint8Array: reading File/Blob", {
+		type: input.type,
+		size: input.size
+	});
+	return fileToUint8Array(input);
+}
+function fileToUint8Array(file) {
+	return new Promise((resolve, reject) => {
+		const reader = new FileReader();
+		reader.onload = () => {
+			const { result } = reader;
+			if (result instanceof ArrayBuffer) resolve(new Uint8Array(result));
+			else resolve(/* @__PURE__ */ new Uint8Array());
+		};
+		reader.onerror = (ev) => {
+			reject(Error(`File could not be read! Code=${(ev?.target?.error)?.code ?? -1}`));
+		};
+		reader.readAsArrayBuffer(file);
+	});
+}
+//#endregion
 //#region src/lib/ffmpeg.ts
 var ffmpegInstance = null;
 var usedFiles = /* @__PURE__ */ new Set();
@@ -4734,24 +4690,21 @@ async function getFFmpeg(baseUrl) {
 	inst.on("log", ({ message }) => {
 		console.log("[bilibili downloader]", "[ffmpeg]", message);
 	});
-	logInfo("ffmpeg", "fetching FFmpeg assets from", baseUrl);
-	const [workerUrl, coreJsUrl, wasmUrl, coreWorkerUrl] = await Promise.all([
+	logInfo("ffmpeg", "fetching FFmpeg assets as blobs from", baseUrl);
+	const [workerUrl, coreUrl, wasmUrl] = await Promise.all([
 		fetchAsBlob(`${baseUrl}/${FFMPEG_WORKER}`, "text/javascript"),
 		fetchAsBlob(`${baseUrl}/${FFMPEG_CORE_JS}`, "text/javascript"),
-		fetchAsBlob(`${baseUrl}/${FFMPEG_CORE_WASM}`, "application/wasm"),
-		fetchAsBlob(`${baseUrl}/${FFMPEG_CORE_WORKER}`, "text/javascript")
+		fetchAsBlob(`${baseUrl}/${FFMPEG_CORE_WASM}`, "application/wasm")
 	]);
 	trackBlobUrl(workerUrl);
-	trackBlobUrl(coreJsUrl);
+	trackBlobUrl(coreUrl);
 	trackBlobUrl(wasmUrl);
-	trackBlobUrl(coreWorkerUrl);
-	logInfo("ffmpeg", "FFmpeg assets fetched as blobs, loading...");
+	logInfo("ffmpeg", "FFmpeg blobs ready, loading...");
 	try {
 		await inst.load({
 			classWorkerURL: workerUrl,
-			coreURL: coreJsUrl,
-			wasmURL: wasmUrl,
-			workerURL: coreWorkerUrl
+			coreURL: coreUrl,
+			wasmURL: wasmUrl
 		});
 		logInfo("ffmpeg", "FFmpeg loaded successfully");
 	} catch (err) {
@@ -4823,114 +4776,250 @@ function setupCleanup() {
 }
 //#endregion
 //#region src/lib/download.ts
-var MODULE$4 = "download";
 /**
-* Download a single stream (advanced mode) with progress.
+* Link builders for the download popup. Pure HTML-string generators — no
+* orchestration logic lives here. Each link carries a JSON-encoded
+* SegmentDescriptor[] (with backup URLs) in a data attribute, which host.ts
+* decodes and passes to the downloader module on click.
+*
+* Segments use { url, backups?, size? } so the downloader can fall back to
+* backup URLs when the primary .m4s CDN URL fails or its signed deadline
+* expires.
 */
-async function downloadSingle(linkEl, segment, filename, progressEl) {
-	linkEl.classList.add("disabled");
-	logInfo(MODULE$4, "downloadSingle start", {
-		filename,
-		size: segment.size
-	});
-	try {
-		const blob = await streamDownload(segment.url, segment.size ?? null, (received, total) => {
-			progressEl.innerHTML = ` downloading - ${received}/${total} - ${Math.ceil(received / total * 100)}%`;
-		});
-		progressEl.innerHTML = " download complete";
-		logInfo(MODULE$4, "downloadSingle: stream complete", {
-			filename,
-			blobSize: blob.size
-		});
-		let ext = new URL(segment.url).pathname.toLowerCase().match(/\.[a-z0-9]+?$/)?.[0] ?? "";
-		if (ext === ".m4s") ext = ".mp4";
-		downloadBlob(new Uint8Array(await blob.arrayBuffer()), filename + ext, progressEl.parentElement);
-		logInfo(MODULE$4, "downloadSingle: blob download triggered", { filename: filename + ext });
-	} catch (err) {
-		logError(MODULE$4, "downloadSingle failed", {
-			filename,
-			url: segment.url
-		}, err);
-		throw err;
-	} finally {
-		linkEl.classList.remove("disabled");
-	}
+function encode(segments) {
+	return encodeURIComponent(JSON.stringify(segments));
 }
 /**
-* Download and merge audio + video (advanced mode with merge on).
+* Normal-mode: plain anchor links. Bilibili's CDN requires a Referer header
+* that the browser only sends on right-click → save-as, so the label tells
+* the user that.
 */
-async function downloadAndMerge(linkEl, segments, filename, progressEl) {
-	linkEl.classList.add("disabled");
-	logInfo(MODULE$4, "downloadAndMerge start", {
-		filename,
-		segmentCount: segments.length
-	});
-	const downloadResults = await Promise.all(segments.map(async ({ url, size }, i) => {
-		const label = i === 0 ? "audio" : "video";
-		const subEl = document.createElement("li");
-		subEl.innerHTML = `${label} (${formatSize(size)}) downloading`;
-		progressEl.appendChild(subEl);
-		const blob = await streamDownload(url, size ?? null, (received, total) => {
-			const pct = Math.ceil(received / total * 100);
-			subEl.innerHTML = `${label} (${formatSize(size)}) downloading - ${received}/${total} - ${pct}%`;
-		});
-		subEl.innerHTML = `${label} (${formatSize(size ?? blob.size)}) downloaded, awaiting merge`;
-		logInfo(MODULE$4, `downloadAndMerge: ${label} downloaded`, { blobSize: blob.size });
-		return blob;
-	}));
-	progressEl.innerHTML = "merging audio+video (time depends on file size)...";
-	const { baseUrl } = getInternals();
-	logInfo(MODULE$4, "downloadAndMerge: starting ffmpeg merge");
-	const [mergedData, cleanup] = await mergeAudioVideo(baseUrl, URL.createObjectURL(downloadResults[0]), URL.createObjectURL(downloadResults[1]));
-	progressEl.innerHTML = "done";
-	logInfo(MODULE$4, "downloadAndMerge: merge complete", { mergedSize: mergedData.byteLength });
-	downloadBlob(new Uint8Array(mergedData), `${filename}.mp4`, progressEl, cleanup);
-}
-/**
-* Normal-mode download: just create a direct download link.
-*/
-function createNormalDownloadLink(filename, segments, isDash) {
+function createNormalDownloadLink({ filename, segments, isDash }) {
 	return segments.map((seg, i) => {
 		const label = isDash ? i === 0 ? "音频" : "视频" : `分段${i + 1}`;
 		const name = `${filename}_${label}`;
 		return `
-          <li>
-            <a title="${name}" download="${name}.mp4" href="${seg.url}">${label}（请点右键选择链接另存为，直接点击无法下载）</a>
-            <span class="size">(${formatSize(seg.size)})</span>
-          </li>
-        `;
+        <li>
+          <a title="${name}" download="${name}.mp4" href="${seg.url}">${label}（请点右键选择链接另存为，直接点击无法下载）</a>
+          <span class="size">(${formatSize(seg.size)})</span>
+        </li>`;
 	}).join("");
 }
-/**
-* Advanced mode, no merge: inline download links with click-to-download.
-*/
-function createAdvancedNoMergeLinks(segments, filename, isDash) {
+/** Advanced mode, no merge: inline click-to-download links per segment. */
+function createAdvancedNoMergeLinks({ filename, segments, isDash }) {
 	return segments.map((seg, i) => {
 		const label = isDash ? i === 0 ? "音频" : "视频" : `分段${i + 1}`;
 		const name = `${filename}_${label}`;
-		const encoded = encodeURIComponent(JSON.stringify(seg));
+		const encoded = encode([seg]);
 		return `
-          <li>
-            <a title="${name}" mode="advanced" merge="off" href="#nogo" durl="${encoded}">${label}</a>
-            <span class="size">(${formatSize(seg.size)})</span>
-            <span durl="${encoded}" class="progress"></span>
-          </li>
-        `;
+        <li>
+          <a title="${name}" mode="advanced" merge="off" href="#nogo" durl="${encoded}">${label}</a>
+          <span class="size">(${formatSize(seg.size)})</span>
+          <span durl="${encoded}" class="progress"></span>
+        </li>`;
 	}).join("");
 }
-/**
-* Advanced mode, merge on: single merge link for dash streams.
-*/
-function createMergeLink(segments, filename) {
+/** Advanced mode, merge on: single "合并下载" link carrying all dash segments. */
+function createMergeLink({ filename, segments }) {
 	const total = segments.reduce((sum, s) => sum + (s.size ?? 0), 0);
-	const encoded = encodeURIComponent(JSON.stringify(segments));
+	const encoded = encode(segments);
 	return `
       <li>
         <a title="${filename}" durls="${encoded}" mode="advanced" type="a+v" merge="on" href="#nogo">合并下载</a>
         <span class="size">(共${formatSize(total)})</span>
         <ul style="margin-top: 8px;" durls="${encoded}" class="progress"></ul>
-      </li>
-    `;
+      </li>`;
+}
+//#endregion
+//#region src/lib/downloader/stream-fetch.ts
+/**
+* Robust stream fetcher for Bilibili CDN .m4s / .mp4 segments.
+*
+* The modern Bilibili CDN (upos-sz-mirror*.bilivideo.com) serves segments as
+* `206 Partial Content` with signed `deadline`-bounded URLs, and each stream
+* comes with a `backup_url` array. This fetcher:
+*
+*   - Tries the primary URL, then each backup URL in order on failure.
+*   - Streams the response body with a progress callback.
+*   - Falls back to a non-streaming arrayBuffer() if the reader is unavailable.
+*   - Honors STREAM_FETCH_DEFAULTS (Referer pinned to bilibili.com) so the CDN
+*     doesn't 403 the request.
+*/
+var MODULE$5 = "stream";
+/**
+* Fetch a single URL with streaming progress and exponential backoff
+* on network errors, rate-limits and server errors. Does NOT handle
+* fallbacks (fetchSegment does that). Throws when all retries are
+* exhausted.
+*/
+async function fetchOne(url, onProgress, signal, maxRetries = 2) {
+	for (let attempt = 0;; attempt++) {
+		let response;
+		try {
+			response = await fetch(url, {
+				...STREAM_FETCH_DEFAULTS,
+				signal
+			});
+		} catch (err) {
+			if (attempt < maxRetries) {
+				const delay = Math.min(1e3 * Math.pow(2, attempt), 1e4);
+				logWarn(MODULE$5, `network error, retry ${attempt + 1}/${maxRetries} in ${delay}ms`, {
+					url: url.slice(0, 80),
+					error: err.message
+				});
+				await new Promise((r) => setTimeout(r, delay));
+				continue;
+			}
+			throw err;
+		}
+		if (!response.ok) {
+			const status = response.status;
+			if (attempt < maxRetries && (status === 429 || status >= 500)) {
+				const delay = Math.min(1e3 * Math.pow(2, attempt), 3e4);
+				logWarn(MODULE$5, `HTTP ${status}, retry ${attempt + 1}/${maxRetries} in ${delay}ms`, { url: url.slice(0, 80) });
+				await new Promise((r) => setTimeout(r, delay));
+				continue;
+			}
+			throw new Error(`HTTP ${status} ${response.statusText}`);
+		}
+		const contentLength = parseInt(response.headers.get("content-length") ?? "-1", 10);
+		let received = 0;
+		const reader = response.body?.getReader();
+		if (!reader) {
+			logWarn(MODULE$5, "no body reader, falling back to arrayBuffer", { url: url.slice(0, 80) });
+			const buf = await response.arrayBuffer();
+			onProgress?.({
+				total: buf.byteLength,
+				received: buf.byteLength,
+				done: true
+			});
+			return new Blob([buf]);
+		}
+		const chunks = [];
+		let aborted = false;
+		try {
+			for (;;) {
+				const result = await reader.read();
+				if (result.done) {
+					onProgress?.({
+						total: contentLength,
+						received,
+						done: true
+					});
+					break;
+				}
+				chunks.push(result.value);
+				received += result.value.byteLength;
+				onProgress?.({
+					total: contentLength,
+					received,
+					done: false
+				});
+			}
+		} catch (err) {
+			aborted = true;
+			logWarn(MODULE$5, `read stream error, retry ${attempt + 1}/${maxRetries}`, {
+				url: url.slice(0, 80),
+				error: err.message
+			});
+			await reader.cancel().catch(() => {});
+			if (attempt < maxRetries) continue;
+			throw err;
+		}
+		if (aborted) continue;
+		const merged = new Blob(chunks);
+		logInfo(MODULE$5, "fetchOne complete", {
+			url: url.slice(0, 80),
+			received,
+			blobSize: merged.size,
+			contentLength
+		});
+		return merged;
+	}
+}
+/**
+* Fetch a segment from a list of candidate URLs (primary first, then backups).
+*
+* On network/HTTP errors, advances to the next backup URL. Returns the Blob
+* and the URL that succeeded.
+*/
+async function fetchSegment(urls, onProgress, signal) {
+	if (urls.length === 0) throw new Error("fetchSegment: no URLs provided");
+	let lastErr;
+	for (let i = 0; i < urls.length; i++) {
+		const url = urls[i];
+		if (i > 0) logWarn(MODULE$5, `trying backup URL ${i}`, { url: url.slice(0, 80) });
+		try {
+			return {
+				blob: await fetchOne(url, onProgress, signal),
+				usedUrl: url
+			};
+		} catch (err) {
+			lastErr = err;
+			logError(MODULE$5, `fetch failed for URL ${i}`, { url: url.slice(0, 80) }, err);
+		}
+	}
+	throw new Error(`all segment URLs failed; last error: ${lastErr?.message ?? lastErr}`);
+}
+//#endregion
+//#region src/lib/downloader/orchestration.ts
+/**
+* Download orchestration for Bilibili streams, decoupled from UI rendering.
+*
+* Three flows:
+*   - downloadStream: fetch a single segment (primary + backup fallback chain).
+*   - downloadAndMerge: fetch audio + video in parallel, then merge via FFmpeg.
+*   - downloadDurlSegments: fetch a sequence of DURL segments and concatenate.
+*
+* Progress is reported via callbacks so the UI layer can render it however it
+* likes. This module never touches the DOM directly except through the
+* `downloadBlob` helper it's given.
+*/
+var MODULE$4 = "dl-orch";
+/**
+* Download a single segment to a Blob, with primary→backup fallback and progress.
+*/
+async function downloadStream(segment, onProgress) {
+	const urls = [segment.url, ...segment.backups ?? []].filter(Boolean);
+	if (urls.length === 0) throw new Error("downloadStream: segment has no usable URLs");
+	logInfo(MODULE$4, "downloadStream start", {
+		urlCount: urls.length,
+		size: segment.size
+	});
+	return fetchSegment(urls, ({ received, total, done }) => {
+		if (!done) onProgress?.(received, total);
+	}).then((r) => r.blob);
+}
+/**
+* Download audio + video in parallel, then merge into a single .mp4.
+* Returns the merged ArrayBuffer and a cleanup function for FFmpeg temp files.
+*/
+async function downloadAndMerge(segments, onProgress) {
+	logInfo(MODULE$4, "downloadAndMerge start", {
+		audioUrl: segments.audio.url.slice(0, 80),
+		videoUrl: segments.video.url.slice(0, 80)
+	});
+	const [audioBlob, videoBlob] = await Promise.all([downloadStream(segments.audio, (r, t) => onProgress?.("audio", r, t)).catch((err) => {
+		throw new Error(`audio download failed: ${err.message}`);
+	}), downloadStream(segments.video, (r, t) => onProgress?.("video", r, t)).catch((err) => {
+		throw new Error(`video download failed: ${err.message}`);
+	})]);
+	logInfo(MODULE$4, "downloadAndMerge: both streams downloaded", {
+		audioSize: audioBlob.size,
+		videoSize: videoBlob.size
+	});
+	const { baseUrl } = getInternals();
+	const [data, cleanup] = await mergeAudioVideo(baseUrl, URL.createObjectURL(audioBlob), URL.createObjectURL(videoBlob));
+	logInfo(MODULE$4, "downloadAndMerge: merge complete", { mergedSize: data.byteLength });
+	return {
+		data,
+		cleanup
+	};
+}
+/** Derive a file extension from a segment URL, mapping .m4s → .mp4. */
+function extensionForUrl(url) {
+	const ext = new URL(url).pathname.toLowerCase().match(/\.[a-z0-9]+?$/)?.[0] ?? "";
+	return ext === ".m4s" ? ".mp4" : ext;
 }
 //#endregion
 //#region src/lib/host.ts
@@ -4991,8 +5080,9 @@ function ensureButton() {
 	btnEl.style.cssText = "display:inline-flex;align-items:center;cursor:pointer;";
 	btnEl.innerHTML = `
 		<div class="video-toolbar-left-item" style="display:flex;flex-direction:column;align-items:center;gap:2px;color:var(--text1,#18191C);font-size:12px">
-			<svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-				<path d="M5 20h14v-2H5v2zm7-18L5.33 9h3.84v4h3.66V9h3.84L12 2z" fill="currentColor"/>
+			<svg width="28" height="28" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg" class="video-toolbar-item-icon" fill="currentColor">
+				<path d="M23 17v5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-5h2v5h14v-5h2z"/>
+				<path d="M14 4a1 1 0 0 1 1 1v9.586l3.293-3.293a1 1 0 0 1 1.414 1.414l-5 5a1 1 0 0 1-1.414 0l-5-5a1 1 0 0 1 1.414-1.414L13 14.586V5a1 1 0 0 1 1-1z"/>
 			</svg>
 			<span>下载</span>
 		</div>
@@ -5080,24 +5170,42 @@ function showPopup() {
 		if (target.tagName.toLowerCase() !== "a") return;
 		const anchor = target;
 		if (anchor.classList.contains("disabled")) return;
+		if (anchor.getAttribute("mode") !== "advanced") {
+			const title = anchor.getAttribute("title") ?? "download";
+			const logsEl = popupEl?.querySelector("#bilibili-helper-popup-logs") ?? null;
+			e.preventDefault();
+			e.stopPropagation();
+			const seg = {
+				url: anchor.getAttribute("href") ?? "",
+				backups: [],
+				size: anchor.parentElement?.querySelector(".size")?.textContent ? parseSize(anchor.parentElement.querySelector(".size").textContent) : void 0
+			};
+			if (seg.url) {
+				appendLog(logsEl, `downloading ${title}...`);
+				runSingle(anchor, seg, title, logsEl).catch((err) => {
+					appendLog(logsEl, `download failed: ${err}`);
+				});
+			}
+			return;
+		}
 		e.preventDefault();
 		e.stopPropagation();
 		const filename = anchor.getAttribute("title") ?? "download";
-		const logsEl = popupEl?.querySelector("#bilibili-helper-popup-logs");
+		const logsEl = popupEl?.querySelector("#bilibili-helper-popup-logs") ?? null;
 		if (anchor.getAttribute("merge") === "on") {
 			const durlsAttr = anchor.getAttribute("durls");
 			if (!durlsAttr) return;
 			const segments = JSON.parse(decodeURIComponent(durlsAttr));
 			appendLog(logsEl, `merging ${filename}...`);
-			downloadAndMerge(anchor, segments, filename, logsEl).catch((err) => {
+			runMerge(anchor, segments, filename, logsEl).catch((err) => {
 				appendLog(logsEl, `merge failed: ${err}`);
 			});
 		} else {
 			const durlAttr = anchor.getAttribute("durl");
 			if (!durlAttr) return;
-			const segment = JSON.parse(decodeURIComponent(durlAttr));
+			const segments = JSON.parse(decodeURIComponent(durlAttr));
 			appendLog(logsEl, `downloading ${filename}...`);
-			downloadSingle(anchor, segment, filename, logsEl).catch((err) => {
+			runSingle(anchor, segments[0], filename, logsEl).catch((err) => {
 				appendLog(logsEl, `download failed: ${err}`);
 			});
 		}
@@ -5105,6 +5213,58 @@ function showPopup() {
 }
 function isDash(info) {
 	return !!info.dash;
+}
+/** Convert a LinkSegment (primary + backups) to the downloader's SegmentDescriptor. */
+function toDescriptor(seg) {
+	return {
+		url: seg.url,
+		backups: seg.backups,
+		size: seg.size
+	};
+}
+/** Run a single-segment download with progress, then trigger the browser save. */
+async function runSingle(anchor, seg, filename, logsEl) {
+	anchor.classList.add("disabled");
+	const progressEl = anchor.parentElement?.querySelector(".progress");
+	try {
+		const blob = await downloadStream(toDescriptor(seg), (received, total) => {
+			const pct = total > 0 ? Math.round(received / total * 100) : 0;
+			progressEl?.replaceChildren(document.createTextNode(` downloading ${pct}%`));
+		});
+		const ext = extensionForUrl(seg.url);
+		progressEl?.replaceChildren(document.createTextNode(" download complete"));
+		appendLog(logsEl, `downloaded ${filename}${ext}`);
+		downloadBlob(new Uint8Array(await blob.arrayBuffer()), filename + ext, logsEl);
+	} finally {
+		anchor.classList.remove("disabled");
+	}
+}
+/** Run a parallel audio+video download + FFmpeg merge. */
+async function runMerge(anchor, segments, filename, logsEl) {
+	anchor.classList.add("disabled");
+	const progressEl = anchor.parentElement?.querySelector(".progress");
+	const audioEl = document.createElement("li");
+	const videoEl = document.createElement("li");
+	if (progressEl) progressEl.append(audioEl, videoEl);
+	const fmt = (which) => {
+		audioEl.replaceChildren(document.createTextNode("audio downloading"));
+		videoEl.replaceChildren(document.createTextNode("video downloading"));
+	};
+	fmt("audio");
+	try {
+		const { data, cleanup } = await downloadAndMerge({
+			audio: toDescriptor(segments[0]),
+			video: toDescriptor(segments[1])
+		}, (which, received, total) => {
+			const pct = total > 0 ? Math.round(received / total * 100) : 0;
+			(which === "audio" ? audioEl : videoEl).replaceChildren(document.createTextNode(`${which} downloading ${pct}%`));
+		});
+		progressEl?.replaceChildren(document.createTextNode("done"));
+		appendLog(logsEl, `merged ${filename}.mp4`);
+		downloadBlob(new Uint8Array(data), `${filename}.mp4`, logsEl, cleanup);
+	} finally {
+		anchor.classList.remove("disabled");
+	}
 }
 function rebuildPopupLinks() {
 	const linksEl = popupEl?.querySelector("#bilibili-helper-popup-links");
@@ -5121,22 +5281,45 @@ function appendLog(el, msg) {
 function escapeHtml(s) {
 	return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
+/** Parse a human-readable size string like '12.34MB' or '5.67GB' back to bytes. */
+function parseSize(text) {
+	if (!text) return void 0;
+	const m = text.trim().match(/^([\d.]+)\s*(B|KB|MB|GB)$/i);
+	if (!m) return void 0;
+	const num = parseFloat(m[1]);
+	switch (m[2].toUpperCase()) {
+		case "GB": return num * 1024 * 1024 * 1024;
+		case "MB": return num * 1024 * 1024;
+		case "KB": return num * 1024;
+		default: return num;
+	}
+}
 function linksHtml(info) {
 	if (info.code !== ErrorCode.OK) return `<div style="color:#f85a54">${escapeHtml(info.message || "Unknown error")}</div>`;
 	const isDash = !!info.dash;
 	const segments = [];
-	if (isDash && info.dash) segments.push({
-		url: info.dash.audio.base_url ?? info.dash.audio.baseUrl ?? "",
-		size: info.dash.audio.size
-	}, {
-		url: info.dash.video.base_url ?? info.dash.video.baseUrl ?? "",
-		size: info.dash.video.size
+	if (isDash && info.dash) segments.push(streamToLinkSegment(info.dash.audio), streamToLinkSegment(info.dash.video));
+	else if (info.durl) for (const seg of info.durl) segments.push({
+		url: seg.url,
+		backups: seg.backup_url,
+		size: seg.size
 	});
-	else if (info.durl) segments.push(...info.durl);
-	const title = info.title ?? "";
-	if (!isAdvancedMode()) return createNormalDownloadLink(title, segments, isDash);
-	if (!isMergeMode() || !isDash) return createAdvancedNoMergeLinks(segments, title, isDash);
-	return createMergeLink(segments, title);
+	const opts = {
+		filename: info.title ?? "",
+		segments,
+		isDash
+	};
+	if (!isAdvancedMode()) return createNormalDownloadLink(opts);
+	if (!isMergeMode() || !isDash) return createAdvancedNoMergeLinks(opts);
+	return createMergeLink(opts);
+}
+/** Map a DashStream to a LinkSegment, pulling primary + backup URLs. */
+function streamToLinkSegment(stream) {
+	return {
+		url: stream.base_url ?? stream.baseUrl ?? "",
+		backups: (stream.backup_url ?? stream.backupUrl ?? []).filter(Boolean),
+		size: stream.size
+	};
 }
 /**
 * Show or update the download info. If the button doesn't exist yet, inject it.
@@ -6102,7 +6285,35 @@ function extractKeysFromNav(navData) {
 		subKey
 	};
 }
-/** Fetch and cache the WBI keys from the nav API. */
+/**
+* Try to extract WBI keys from window.__INITIAL_STATE__ (embedded in the page HTML).
+* This serves as a fallback when the nav API is unavailable (e.g. logged-out users
+* who get -101 from /x/web-interface/nav).
+*/
+function tryExtractKeysFromPage() {
+	try {
+		const pageState = (typeof window !== "undefined" ? window : null)?.__INITIAL_STATE__;
+		if (!pageState) {
+			logInfo(MODULE$2, "tryExtractKeysFromPage: no __INITIAL_STATE__ in window");
+			return null;
+		}
+		const wbiImg = pageState.wbi_img;
+		if (!wbiImg) {
+			logInfo(MODULE$2, "tryExtractKeysFromPage: no wbi_img in __INITIAL_STATE__");
+			return null;
+		}
+		const keys = extractKeysFromNav({ wbi_img: wbiImg });
+		if (keys) logInfo(MODULE$2, "WBI keys extracted from __INITIAL_STATE__", {
+			imgKey: keys.imgKey.slice(0, 8) + "...",
+			subKey: keys.subKey.slice(0, 8) + "..."
+		});
+		return keys;
+	} catch (err) {
+		logWarn(MODULE$2, "tryExtractKeysFromPage: error", err);
+		return null;
+	}
+}
+/** Fetch and cache the WBI keys from the nav API, with a fallback to page state. */
 async function fetchWbiKeys(force = false) {
 	if (!force && cachedKeys && Date.now() - cachedKeys.fetchedAt < KEY_TTL_MS) {
 		logInfo(MODULE$2, "using cached WBI keys", { age: Date.now() - cachedKeys.fetchedAt });
@@ -6115,25 +6326,56 @@ async function fetchWbiKeys(force = false) {
 		force,
 		reason: force ? "forced" : "cache miss/expired"
 	});
-	const json = await (await window.fetch(NAV_API, FETCH_DEFAULTS)).json();
-	if (json.code !== 0) {
-		logError(MODULE$2, "nav API returned non-zero code", json.code);
-		throw new Error(`nav API returned code ${json.code}`);
+	try {
+		const json = await (await window.fetch(NAV_API, FETCH_DEFAULTS)).json();
+		if (json.code !== 0) {
+			logWarn(MODULE$2, "nav API returned non-zero code, trying page fallback", json.code);
+			const fallback = tryExtractKeysFromPage();
+			if (fallback) {
+				cachedKeys = {
+					...fallback,
+					fetchedAt: Date.now()
+				};
+				return fallback;
+			}
+			throw new Error(`nav API returned code ${json.code} and no page fallback available`);
+		}
+		const keys = extractKeysFromNav(json.data ?? {});
+		if (!keys) {
+			logWarn(MODULE$2, "failed to extract WBI keys from nav response, trying page fallback", json.data);
+			const fallback = tryExtractKeysFromPage();
+			if (fallback) {
+				cachedKeys = {
+					...fallback,
+					fetchedAt: Date.now()
+				};
+				return fallback;
+			}
+			throw new Error("failed to extract WBI keys from nav response and no page fallback available");
+		}
+		cachedKeys = {
+			...keys,
+			fetchedAt: Date.now()
+		};
+		logInfo(MODULE$2, "WBI keys fetched and cached", {
+			imgKey: keys.imgKey.slice(0, 8) + "...",
+			subKey: keys.subKey.slice(0, 8) + "..."
+		});
+		return keys;
+	} catch (err) {
+		if (err instanceof TypeError || err instanceof Error && err.message.includes("fetch")) {
+			logWarn(MODULE$2, "nav API fetch failed (network error), trying page fallback", err);
+			const fallback = tryExtractKeysFromPage();
+			if (fallback) {
+				cachedKeys = {
+					...fallback,
+					fetchedAt: Date.now()
+				};
+				return fallback;
+			}
+		}
+		throw err;
 	}
-	const keys = extractKeysFromNav(json.data ?? {});
-	if (!keys) {
-		logError(MODULE$2, "failed to extract WBI keys from nav response", json.data);
-		throw new Error("failed to extract WBI keys from nav response");
-	}
-	cachedKeys = {
-		...keys,
-		fetchedAt: Date.now()
-	};
-	logInfo(MODULE$2, "WBI keys fetched and cached", {
-		imgKey: keys.imgKey.slice(0, 8) + "...",
-		subKey: keys.subKey.slice(0, 8) + "..."
-	});
-	return keys;
 }
 /** Clear the cached WBI keys (used when a signed request fails). */
 function clearWbiKeys() {
@@ -6637,7 +6879,20 @@ async function processVideoPage() {
 		cid,
 		quality
 	});
-	const playResult = await fetchUgcPlayUrl(avid, bvid, cid, quality);
+	let playResult = null;
+	try {
+		const playinfo = window.__playinfo__;
+		if (playinfo?.data && (playinfo.data.dash || playinfo.data.durl)) {
+			logInfo(MODULE, "using __playinfo__ from page context");
+			playResult = processPlayUrlResult(playinfo.data, quality);
+		} else logInfo(MODULE, "__playinfo__ not available on page");
+	} catch (err) {
+		logWarn(MODULE, "__playinfo__ parse failed", err);
+	}
+	if (!playResult || playResult.code !== ErrorCode.OK) {
+		logInfo(MODULE, "falling back to WBI API fetch");
+		playResult = await fetchUgcPlayUrl(avid, bvid, cid, quality);
+	}
 	if (playResult.code === ErrorCode.OK) {
 		let title = videoData.title;
 		if (pageNum !== void 0 && pageTitle) title = `${videoData.title}_P${pageNum}_${pageTitle}`;

@@ -82,29 +82,85 @@ export function extractKeysFromNav(navData: {
 	return { imgKey, subKey };
 }
 
-/** Fetch and cache the WBI keys from the nav API. */
+/**
+ * Try to extract WBI keys from window.__INITIAL_STATE__ (embedded in the page HTML).
+ * This serves as a fallback when the nav API is unavailable (e.g. logged-out users
+ * who get -101 from /x/web-interface/nav).
+ */
+export function tryExtractKeysFromPage(): { imgKey: string; subKey: string } | null {
+	try {
+		const win = typeof window !== 'undefined' ? (window as unknown as Record<string, unknown>) : null;
+		const pageState = win?.__INITIAL_STATE__ as Record<string, unknown> | undefined;
+		if (!pageState) {
+			logInfo(MODULE, 'tryExtractKeysFromPage: no __INITIAL_STATE__ in window');
+			return null;
+		}
+		const wbiImg = pageState.wbi_img as { img_url?: string; sub_url?: string } | undefined;
+		if (!wbiImg) {
+			logInfo(MODULE, 'tryExtractKeysFromPage: no wbi_img in __INITIAL_STATE__');
+			return null;
+		}
+		const keys = extractKeysFromNav({ wbi_img: wbiImg });
+		if (keys) {
+			logInfo(MODULE, 'WBI keys extracted from __INITIAL_STATE__', {
+				imgKey: keys.imgKey.slice(0, 8) + '...',
+				subKey: keys.subKey.slice(0, 8) + '...'
+			});
+		}
+		return keys;
+	} catch (err) {
+		logWarn(MODULE, 'tryExtractKeysFromPage: error', err);
+		return null;
+	}
+}
+
+/** Fetch and cache the WBI keys from the nav API, with a fallback to page state. */
 export async function fetchWbiKeys(force = false): Promise<{ imgKey: string; subKey: string }> {
 	if (!force && cachedKeys && Date.now() - cachedKeys.fetchedAt < KEY_TTL_MS) {
 		logInfo(MODULE, 'using cached WBI keys', { age: Date.now() - cachedKeys.fetchedAt });
 		return { imgKey: cachedKeys.imgKey, subKey: cachedKeys.subKey };
 	}
 
+	// Try the nav API first.
 	logInfo(MODULE, 'fetching WBI keys from nav API', { force, reason: force ? 'forced' : 'cache miss/expired' });
-	const resp = await window.fetch(NAV_API, FETCH_DEFAULTS);
-	const json: { code: number; data?: { wbi_img?: { img_url?: string; sub_url?: string } } } =
-		await resp.json();
-	if (json.code !== 0) {
-		logError(MODULE, 'nav API returned non-zero code', json.code);
-		throw new Error(`nav API returned code ${json.code}`);
+	try {
+		const resp = await window.fetch(NAV_API, FETCH_DEFAULTS);
+		const json: { code: number; data?: { wbi_img?: { img_url?: string; sub_url?: string } } } =
+			await resp.json();
+		if (json.code !== 0) {
+			logWarn(MODULE, 'nav API returned non-zero code, trying page fallback', json.code);
+			const fallback = tryExtractKeysFromPage();
+			if (fallback) {
+				cachedKeys = { ...fallback, fetchedAt: Date.now() };
+				return fallback;
+			}
+			throw new Error(`nav API returned code ${json.code} and no page fallback available`);
+		}
+		const keys = extractKeysFromNav(json.data ?? {});
+		if (!keys) {
+			logWarn(MODULE, 'failed to extract WBI keys from nav response, trying page fallback', json.data);
+			const fallback = tryExtractKeysFromPage();
+			if (fallback) {
+				cachedKeys = { ...fallback, fetchedAt: Date.now() };
+				return fallback;
+			}
+			throw new Error('failed to extract WBI keys from nav response and no page fallback available');
+		}
+		cachedKeys = { ...keys, fetchedAt: Date.now() };
+		logInfo(MODULE, 'WBI keys fetched and cached', { imgKey: keys.imgKey.slice(0, 8) + '...', subKey: keys.subKey.slice(0, 8) + '...' });
+		return keys;
+	} catch (err) {
+		// Network errors: try page fallback before giving up.
+		if (err instanceof TypeError || (err instanceof Error && err.message.includes('fetch'))) {
+			logWarn(MODULE, 'nav API fetch failed (network error), trying page fallback', err);
+			const fallback = tryExtractKeysFromPage();
+			if (fallback) {
+				cachedKeys = { ...fallback, fetchedAt: Date.now() };
+				return fallback;
+			}
+		}
+		throw err;
 	}
-	const keys = extractKeysFromNav(json.data ?? {});
-	if (!keys) {
-		logError(MODULE, 'failed to extract WBI keys from nav response', json.data);
-		throw new Error('failed to extract WBI keys from nav response');
-	}
-	cachedKeys = { ...keys, fetchedAt: Date.now() };
-	logInfo(MODULE, 'WBI keys fetched and cached', { imgKey: keys.imgKey.slice(0, 8) + '...', subKey: keys.subKey.slice(0, 8) + '...' });
-	return keys;
 }
 
 /** Clear the cached WBI keys (used when a signed request fails). */

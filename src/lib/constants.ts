@@ -19,7 +19,6 @@ export const CONTENT_SCRIPT_ELEMENT_ID = 'bilibili-helper-ext-content-script';
 export const FFMPEG_WORKER = 'ffmpeg.worker.js';
 export const FFMPEG_CORE_JS = 'ffmpeg-core.js';
 export const FFMPEG_CORE_WASM = 'ffmpeg-core.wasm';
-export const FFMPEG_CORE_WORKER = 'ffmpeg-core.worker.js';
 
 // ── API ──
 export const UGC_PLAY_URL_API = 'https://api.bilibili.com/x/player/wbi/playurl';

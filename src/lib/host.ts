@@ -7,7 +7,7 @@
  */
 
 import { HOST_ELEMENT_ID, QUALITY_LABELS } from './constants';
-import { getInternals, isAdvancedMode, isMergeMode, formatSize } from './utils';
+import { isAdvancedMode, isMergeMode, downloadBlob } from './utils';
 import { ErrorCode } from './schemas';
 import type { PlayUrlResult } from './bilibili-api';
 import type { DurlSegment, DashStream } from './schemas';
@@ -15,9 +15,14 @@ import {
 	createNormalDownloadLink,
 	createAdvancedNoMergeLinks,
 	createMergeLink,
-	downloadSingle,
-	downloadAndMerge
+	type LinkSegment
 } from './download';
+import {
+	downloadStream,
+	downloadAndMerge as downloadAndMergeStreams,
+	extensionForUrl,
+	type SegmentDescriptor
+} from './downloader/orchestration';
 import { logInfo, logWarn, logError } from './logger';
 
 const MODULE = 'host';
@@ -58,7 +63,7 @@ function ensureButton(): HTMLElement {
 	// Nuke the old floating bar
 	cleanupOldHost();
 
-	// Find the share button wrapper — insert after it
+	// Find the share button wrapper -- insert after it
 	const shareWrap = document.querySelector('.toolbar-left-item-wrap .video-share-wrap');
 	if (!shareWrap) {
 		logWarn(MODULE, 'share button not found, using fallback popup position');
@@ -98,8 +103,9 @@ function ensureButton(): HTMLElement {
 	btnEl.style.cssText = 'display:inline-flex;align-items:center;cursor:pointer;';
 	btnEl.innerHTML = `
 		<div class="video-toolbar-left-item" style="display:flex;flex-direction:column;align-items:center;gap:2px;color:var(--text1,#18191C);font-size:12px">
-			<svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-				<path d="M5 20h14v-2H5v2zm7-18L5.33 9h3.84v4h3.66V9h3.84L12 2z" fill="currentColor"/>
+			<svg width="28" height="28" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg" class="video-toolbar-item-icon" fill="currentColor">
+				<path d="M23 17v5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-5h2v5h14v-5h2z"/>
+				<path d="M14 4a1 1 0 0 1 1 1v9.586l3.293-3.293a1 1 0 0 1 1.414 1.414l-5 5a1 1 0 0 1-1.414 0l-5-5a1 1 0 0 1 1.414-1.414L13 14.586V5a1 1 0 0 1 1-1z"/>
 			</svg>
 			<span>下载</span>
 		</div>
@@ -200,26 +206,52 @@ function showPopup(): void {
 		if (target.tagName.toLowerCase() !== 'a') return;
 		const anchor = target as HTMLAnchorElement;
 		if (anchor.classList.contains('disabled')) return;
+
+		// Normal-mode links: intercept because CDN URLs are cross-origin.
+		// Download programmatically via stream fetch.
+		if (anchor.getAttribute('mode') !== 'advanced') {
+			const title = anchor.getAttribute('title') ?? 'download';
+			const logsEl = (popupEl?.querySelector('#bilibili-helper-popup-logs') as HTMLElement | null) ?? null;
+			e.preventDefault();
+			e.stopPropagation();
+
+			// Build a LinkSegment from the href and parse any sibling size text
+			const seg: LinkSegment = {
+				url: anchor.getAttribute('href') ?? '',
+				backups: [],
+				size: anchor.parentElement?.querySelector('.size')?.textContent
+					? parseSize(anchor.parentElement.querySelector('.size')!.textContent!)
+					: undefined
+			};
+			if (seg.url) {
+				appendLog(logsEl, `downloading ${title}...`);
+				runSingle(anchor, seg, title, logsEl!).catch((err) => {
+					appendLog(logsEl, `download failed: ${err}`);
+				});
+			}
+			return;
+		}
+
 		e.preventDefault();
 		e.stopPropagation();
 
 		const filename = anchor.getAttribute('title') ?? 'download';
-		const logsEl = popupEl?.querySelector('#bilibili-helper-popup-logs');
+		const logsEl = (popupEl?.querySelector('#bilibili-helper-popup-logs') as HTMLElement | null) ?? null;
 
 		if (anchor.getAttribute('merge') === 'on') {
 			const durlsAttr = anchor.getAttribute('durls');
 			if (!durlsAttr) return;
-			const segments: Array<{ url: string; size?: number }> = JSON.parse(decodeURIComponent(durlsAttr));
+			const segments: LinkSegment[] = JSON.parse(decodeURIComponent(durlsAttr));
 			appendLog(logsEl, `merging ${filename}...`);
-			downloadAndMerge(anchor, segments, filename, logsEl!).catch((err) => {
+			runMerge(anchor, segments, filename, logsEl!).catch((err) => {
 				appendLog(logsEl, `merge failed: ${err}`);
 			});
 		} else {
 			const durlAttr = anchor.getAttribute('durl');
 			if (!durlAttr) return;
-			const segment: { url: string; size?: number } = JSON.parse(decodeURIComponent(durlAttr));
+			const segments: LinkSegment[] = JSON.parse(decodeURIComponent(durlAttr));
 			appendLog(logsEl, `downloading ${filename}...`);
-			downloadSingle(anchor, segment, filename, logsEl!).catch((err) => {
+			runSingle(anchor, segments[0], filename, logsEl!).catch((err) => {
 				appendLog(logsEl, `download failed: ${err}`);
 			});
 		}
@@ -228,6 +260,74 @@ function showPopup(): void {
 
 function isDash(info: DisplayInfo): boolean {
 	return !!info.dash;
+}
+
+/** Convert a LinkSegment (primary + backups) to the downloader's SegmentDescriptor. */
+function toDescriptor(seg: LinkSegment): SegmentDescriptor {
+	return { url: seg.url, backups: seg.backups, size: seg.size };
+}
+
+/** Run a single-segment download with progress, then trigger the browser save. */
+async function runSingle(
+	anchor: HTMLAnchorElement,
+	seg: LinkSegment,
+	filename: string,
+	logsEl: HTMLElement
+): Promise<void> {
+	anchor.classList.add('disabled');
+	const progressEl = anchor.parentElement?.querySelector('.progress') as HTMLElement | null;
+	try {
+		const blob = await downloadStream(toDescriptor(seg), (received, total) => {
+			const pct = total > 0 ? Math.round((received / total) * 100) : 0;
+			progressEl?.replaceChildren(document.createTextNode(` downloading ${pct}%`));
+		});
+		const ext = extensionForUrl(seg.url);
+		progressEl?.replaceChildren(document.createTextNode(' download complete'));
+		appendLog(logsEl, `downloaded ${filename}${ext}`);
+		downloadBlob(new Uint8Array(await blob.arrayBuffer()), filename + ext, logsEl);
+	} finally {
+		anchor.classList.remove('disabled');
+	}
+}
+
+/** Run a parallel audio+video download + FFmpeg merge. */
+async function runMerge(
+	anchor: HTMLAnchorElement,
+	segments: LinkSegment[],
+	filename: string,
+	logsEl: HTMLElement
+): Promise<void> {
+	anchor.classList.add('disabled');
+	const progressEl = anchor.parentElement?.querySelector('.progress') as HTMLElement | null;
+	const audioEl = document.createElement('li');
+	const videoEl = document.createElement('li');
+	if (progressEl) {
+		progressEl.append(audioEl, videoEl);
+	}
+	const fmt = (which: 'audio' | 'video'): void => {
+		audioEl.replaceChildren(document.createTextNode('audio downloading'));
+		videoEl.replaceChildren(document.createTextNode('video downloading'));
+	};
+	fmt('audio');
+	try {
+		const { data, cleanup } = await downloadAndMergeStreams(
+			{
+				audio: toDescriptor(segments[0]),
+				video: toDescriptor(segments[1])
+			},
+			(which, received, total) => {
+				const pct = total > 0 ? Math.round((received / total) * 100) : 0;
+				(which === 'audio' ? audioEl : videoEl).replaceChildren(
+					document.createTextNode(`${which} downloading ${pct}%`)
+				);
+			}
+		);
+		progressEl?.replaceChildren(document.createTextNode('done'));
+		appendLog(logsEl, `merged ${filename}.mp4`);
+		downloadBlob(new Uint8Array(data), `${filename}.mp4`, logsEl, cleanup);
+	} finally {
+		anchor.classList.remove('disabled');
+	}
 }
 
 function rebuildPopupLinks(): void {
@@ -251,28 +351,49 @@ function escapeHtml(s: string): string {
 	return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+/** Parse a human-readable size string like '12.34MB' or '5.67GB' back to bytes. */
+function parseSize(text: string | null | undefined): number | undefined {
+	if (!text) return undefined;
+	const m = text.trim().match(/^([\d.]+)\s*(B|KB|MB|GB)$/i);
+	if (!m) return undefined;
+	const num = parseFloat(m[1]);
+	switch (m[2].toUpperCase()) {
+		case 'GB': return num * 1024 * 1024 * 1024;
+		case 'MB': return num * 1024 * 1024;
+		case 'KB': return num * 1024;
+		default: return num;
+	}
+}
+
 function linksHtml(info: DisplayInfo): string {
 	if (info.code !== ErrorCode.OK) return `<div style="color:#f85a54">${escapeHtml(info.message || 'Unknown error')}</div>`;
 	const isDash = !!info.dash;
-	const segments: Array<{ url: string; size?: number }> = [];
+	const segments: LinkSegment[] = [];
 	if (isDash && info.dash) {
-		segments.push(
-			{ url: info.dash.audio.base_url ?? info.dash.audio.baseUrl ?? '', size: info.dash.audio.size },
-			{ url: info.dash.video.base_url ?? info.dash.video.baseUrl ?? '', size: info.dash.video.size }
-		);
+		segments.push(streamToLinkSegment(info.dash.audio), streamToLinkSegment(info.dash.video));
 	} else if (info.durl) {
-		segments.push(...info.durl);
+		for (const seg of info.durl) {
+			segments.push({ url: seg.url, backups: seg.backup_url, size: seg.size });
+		}
 	}
 
 	const title = info.title ?? '';
+	const opts = { filename: title, segments, isDash };
 
 	if (!isAdvancedMode()) {
-		return createNormalDownloadLink(title, segments, isDash);
+		return createNormalDownloadLink(opts);
 	}
 	if (!isMergeMode() || !isDash) {
-		return createAdvancedNoMergeLinks(segments, title, isDash);
+		return createAdvancedNoMergeLinks(opts);
 	}
-	return createMergeLink(segments, title);
+	return createMergeLink(opts);
+}
+
+/** Map a DashStream to a LinkSegment, pulling primary + backup URLs. */
+function streamToLinkSegment(stream: DashStream): LinkSegment {
+	const primary = stream.base_url ?? stream.baseUrl ?? '';
+	const backups = stream.backup_url ?? stream.backupUrl ?? [];
+	return { url: primary, backups: backups.filter(Boolean), size: stream.size };
 }
 
 /**
@@ -282,7 +403,7 @@ export function showDownloadInfo(info: DisplayInfo, loading = false): void {
 	logInfo(MODULE, 'showDownloadInfo', { code: info.code, title: info.title, quality: info.quality, hasDash: !!info.dash, hasDurl: !!info.durl, loading });
 
 	if (loading) {
-		// Don't show loading state — just cache and wait for the real data
+		// Don't show loading state -- just cache and wait for the real data
 		cachedInfo = null;
 		return;
 	}

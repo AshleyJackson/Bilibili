@@ -1,35 +1,18 @@
 /// <reference types="chrome" />
 
-import { FFmpeg } from '@ffmpeg/ffmpeg';
-import {
-	HOST_ELEMENT_ID,
-	CONTENT_SCRIPT_ELEMENT_ID,
-	QUALITY_LABELS,
-	FFMPEG_WORKER,
-	FFMPEG_CORE_JS,
-	FFMPEG_CORE_WASM,
-	FETCH_DEFAULTS
-} from '$lib/constants';
+import { FETCH_DEFAULTS, QUALITY_LABELS } from '$lib/constants';
 import { ErrorCode } from '$lib/schemas';
-import type { DashData, DurlSegment, DashStream } from '$lib/schemas';
+import type { DashData, DurlSegment } from '$lib/schemas';
 import {
-	getInternals,
 	waitForElement,
 	isBilibili,
-	isEdge,
 	isVideoPage,
-	isBangumiPage,
-	isHidden,
-	isAdvancedMode,
-	isMergeMode,
-	formatSize
+	isBangumiPage
 } from '$lib/utils';
-import { fetchAsBlob, toUint8Array, fetchWithProgress, streamDownload } from '$lib/fetch-utils';
+import { setupCleanup } from '$lib/ffmpeg';
 import { showDownloadInfo, log, clearLogs } from '$lib/host';
-import { mergeAudioVideo, setupCleanup, trackBlobUrl } from '$lib/ffmpeg';
-import { downloadBlob } from '$lib/utils';
-import type { PlayUrlResult } from '$lib/bilibili-api';
 import { fetchUgcPlayUrl, fetchBangumiPlayUrl } from '$lib/bilibili-api';
+import type { PlayUrlResult } from '$lib/bilibili-api';
 import { logInfo, logWarn, logError } from '$lib/logger';
 
 const MODULE = 'main';
@@ -317,8 +300,49 @@ async function processVideoPage(): Promise<void> {
 	}
 
 	logInfo(MODULE, 'video info', { avid, bvid, cid, quality });
-	const playResult = await fetchUgcPlayUrl(avid, bvid, cid, quality);
 
+	// ── Get playurl data ──
+	// Strategy: try the page-embedded __playinfo__ first (no auth required, works
+	// for logged-out users), then fall back to the WBI-signed API call.
+	let playResult: PlayUrlResult | null = null;
+
+	// 1. Try __playinfo__ embedded in the page by Bilibili SSR.
+	try {
+		const playinfo = (
+			window as unknown as {
+				__playinfo__?: {
+					data?: {
+						dash?: DashData;
+						durl?: DurlSegment[];
+						video_codecid?: number;
+						accept_quality?: number[];
+						accept_description?: string[];
+						support_formats?: Array<{
+							quality: number;
+							new_description?: string;
+							display_desc?: string;
+						}>;
+					};
+				};
+			}
+		).__playinfo__;
+		if (playinfo?.data && (playinfo.data.dash || playinfo.data.durl)) {
+			logInfo(MODULE, 'using __playinfo__ from page context');
+			playResult = processPlayUrlResult(playinfo.data, quality);
+		} else {
+			logInfo(MODULE, '__playinfo__ not available on page');
+		}
+	} catch (err) {
+		logWarn(MODULE, '__playinfo__ parse failed', err);
+	}
+
+	// 2. Fall back to WBI-signed API call.
+	if (!playResult || playResult.code !== ErrorCode.OK) {
+		logInfo(MODULE, 'falling back to WBI API fetch');
+		playResult = await fetchUgcPlayUrl(avid, bvid, cid, quality);
+	}
+
+	// ── Handle result ──
 	if (playResult.code === ErrorCode.OK) {
 		let title = videoData.title;
 		if (pageNum !== undefined && pageTitle) {

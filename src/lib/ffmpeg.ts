@@ -1,5 +1,5 @@
 import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { FFMPEG_WORKER, FFMPEG_CORE_JS, FFMPEG_CORE_WASM, FFMPEG_CORE_WORKER } from './constants';
+import { FFMPEG_WORKER, FFMPEG_CORE_JS, FFMPEG_CORE_WASM } from './constants';
 import { fetchAsBlob } from './fetch-utils';
 import { toUint8Array } from './fetch-utils';
 import { logInfo, logWarn, logError } from './logger';
@@ -24,26 +24,30 @@ async function getFFmpeg(baseUrl: string): Promise<FFmpeg> {
 		console.log('[bilibili downloader]', '[ffmpeg]', message);
 	});
 
-	logInfo('ffmpeg', 'fetching FFmpeg assets from', baseUrl);
-	const [workerUrl, coreJsUrl, wasmUrl, coreWorkerUrl] = await Promise.all([
+	// All three assets must use blob URLs because:
+	//   1. The content script runs in the page's main world, so
+	//      new Worker(chrome-extension://...) is blocked.
+	//   2. The worker is created as type:"module", so importScripts()
+	//      is unavailable.  It falls back to import(blobURL), which
+	//      works when all three files are blob URLs with the page's origin.
+	//   3. ffmpeg-core.js must be the ESM build so import() returns a
+	//      module with a default export (createFFmpegCore).
+	logInfo('ffmpeg', 'fetching FFmpeg assets as blobs from', baseUrl);
+	const [workerUrl, coreUrl, wasmUrl] = await Promise.all([
 		fetchAsBlob(`${baseUrl}/${FFMPEG_WORKER}`, 'text/javascript'),
 		fetchAsBlob(`${baseUrl}/${FFMPEG_CORE_JS}`, 'text/javascript'),
-		fetchAsBlob(`${baseUrl}/${FFMPEG_CORE_WASM}`, 'application/wasm'),
-		fetchAsBlob(`${baseUrl}/${FFMPEG_CORE_WORKER}`, 'text/javascript')
+		fetchAsBlob(`${baseUrl}/${FFMPEG_CORE_WASM}`, 'application/wasm')
 	]);
-
 	trackBlobUrl(workerUrl);
-	trackBlobUrl(coreJsUrl);
+	trackBlobUrl(coreUrl);
 	trackBlobUrl(wasmUrl);
-	trackBlobUrl(coreWorkerUrl);
 
-	logInfo('ffmpeg', 'FFmpeg assets fetched as blobs, loading...');
+	logInfo('ffmpeg', 'FFmpeg blobs ready, loading...');
 	try {
 		await inst.load({
 			classWorkerURL: workerUrl,
-			coreURL: coreJsUrl,
-			wasmURL: wasmUrl,
-			workerURL: coreWorkerUrl
+			coreURL: coreUrl,
+			wasmURL: wasmUrl
 		});
 		logInfo('ffmpeg', 'FFmpeg loaded successfully');
 	} catch (err) {
@@ -80,7 +84,7 @@ export async function mergeAudioVideo(
 	logInfo('ffmpeg', `ffmpeg merge complete, reading ${mergedFile}`);
 
 	const data = await ffmpeg.readFile(mergedFile);
-	logInfo('ffmpeg', 'merge result size', (data as ArrayBuffer).byteLength);
+	logInfo('ffmpeg', 'merge result size', (data as unknown as ArrayBuffer).byteLength);
 
 	const cleanup = (): void => {
 		ffmpeg.deleteFile(audioFile).catch(() => {});
