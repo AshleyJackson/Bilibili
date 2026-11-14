@@ -24,6 +24,13 @@
     "default_title": "B站下载助手",
     "default_popup": "index.html"
   },
+  "background": {
+    "service_worker": "bilibili-helper-service-worker.js",
+    "type": "module"
+  },
+  "host_permissions": [
+    "https://o1088347.ingest.us.sentry.io/*"
+  ],
   "offline_enabled": true,
   "manifest_version": 3,
   "content_security_policy": {

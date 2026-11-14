@@ -7,6 +7,7 @@
  * Use instead of raw console.log / the host.ts `log()` function directly,
  * so every log message carries a module tag and timestamp for debugging.
  */
+import { dispatchContentScriptError } from './sentry-reporting';
 
 type LogLevel = 'info' | 'warn' | 'error';
 
@@ -93,6 +94,8 @@ export function logWarn(module: string, ...args: unknown[]): void {
 
 export function logError(module: string, ...args: unknown[]): void {
 	log(module, 'error', ...args);
+	const error = args.find((arg): arg is Error => arg instanceof Error);
+	if (error) dispatchContentScriptError(error, module);
 }
 
 /**

@@ -3,6 +3,10 @@ node_modules
 .svelte-kit
 
 /build
+static/bilibili-helper-service-worker.js
+.env.local
+.env.*.local
+.env.sentry-build-plugin
 commit_messages.txt
 pr_changes.diff
 ai_fix_summary.md

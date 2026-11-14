@@ -2,8 +2,16 @@ import { defineConfig } from 'vite';
 import { resolve } from 'path';
 
 export default defineConfig(({ mode }) => {
-	const entryName = mode === 'seed' ? 'bilibili-helper-content-script-seed' : 'bilibili-helper-content-script';
-	const entryFile = mode === 'seed' ? 'seed.ts' : 'main.ts';
+	const isSeed = mode === 'seed';
+	const isWorker = mode === 'worker';
+	const entryName = isSeed
+		? 'bilibili-helper-content-script-seed'
+		: isWorker
+			? 'bilibili-helper-service-worker'
+			: 'bilibili-helper-content-script';
+	const entryFile = isWorker
+		? resolve(__dirname, 'src/background/service-worker.ts')
+		: resolve(__dirname, `src/content-script/${isSeed ? 'seed.ts' : 'main.ts'}`);
 
 	return {
 		resolve: {
@@ -13,7 +21,7 @@ export default defineConfig(({ mode }) => {
 		},
 		build: {
 			lib: {
-				entry: resolve(__dirname, `src/content-script/${entryFile}`),
+				entry: entryFile,
 				formats: ['es'],
 				name: 'BilibiliHelper'
 			},

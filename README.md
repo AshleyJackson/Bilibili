@@ -27,6 +27,12 @@ bun install
 bun run dev
 ```
 
+To send extension errors to Sentry, copy `.env.example` to `.env.local` and set
+`VITE_SENTRY_DSN` to the `bilibili-extension` project's public DSN before building.
+The ignored local env file is used for builds; without a DSN, reporting stays disabled.
+Errors are sent through the extension service worker, not from Bilibili's page context.
+The setup removes request URLs, user data, extra data, and breadcrumbs before sending.
+
 ## Building
 
 Content scripts are built separately from the SvelteKit extension because they run in Bilibili's page context (injected via a seed script).
@@ -44,6 +50,21 @@ bun run build:all
 
 > Load `build/` as an unpacked Chrome extension — see [Extension Development Basics](https://developer.chrome.com/docs/extensions/mv3/getstarted/development-basics/).
 
+## Releasing
+
+To publish a release, bump the `version` in `static/manifest.json` and push the change to `master`. The publish workflow runs the type checks and tests, builds all extension assets, packages a versioned ZIP, publishes it to the Chrome Web Store, and creates a GitHub Release. Changes that do not alter the manifest version do not publish.
+
+Before the first release, add these repository Actions secrets:
+
+- `VITE_SENTRY_DSN`
+- `CHROME_WEB_STORE_EXTENSION_ID`
+- `CHROME_WEB_STORE_PUBLISHER_ID`
+- `CHROME_WEB_STORE_CLIENT_ID`
+- `CHROME_WEB_STORE_CLIENT_SECRET`
+- `CHROME_WEB_STORE_REFRESH_TOKEN`
+
+The workflow fails before building if any required secret is missing. The GitHub Release uses the workflow's built-in `GITHUB_TOKEN`.
+
 ## Testing
 
 ```bash
@@ -54,20 +75,20 @@ Tests live alongside their modules in `src/lib/*.test.ts`. The WBI signing modul
 
 ## Architecture
 
-| Path | Purpose |
-|---|---|
-| `src/routes/` | SvelteKit pages (extension popup/options) |
-| `src/content-script/seed.ts` | Isolated-world MV3 content script — injects `main.ts` into the page |
+| Path                         | Purpose                                                                          |
+| ---------------------------- | -------------------------------------------------------------------------------- |
+| `src/routes/`                | SvelteKit pages (extension popup/options)                                        |
+| `src/content-script/seed.ts` | Isolated-world MV3 content script — injects `main.ts` into the page              |
 | `src/content-script/main.ts` | Page-world logic: XHR interception, page-state parsing, playurl fetch, UI render |
-| `src/lib/wbi.ts` | WBI parameter signing (mixin key + `w_rid`/`wts`) |
-| `src/lib/bilibili-api.ts` | UGC + bangumi playurl API clients |
-| `src/lib/download.ts` | Normal + advanced (merge) download flows |
-| `src/lib/ffmpeg.ts` | WASM FFmpeg audio/video merge |
-| `src/lib/host.ts` | Shadow-DOM helper UI |
-| `src/lib/schemas.ts` | Zod schemas (DashData, DurlSegment, ErrorCode, etc.) |
-| `vite.content.config.ts` | Vite config for the content-script bundle |
-| `tsconfig.content.json` | Standalone tsconfig for content-script type-checking |
-| `static/manifest.json` | MV3 manifest |
-| `build/` | Built extension output (load as unpacked) |
+| `src/lib/wbi.ts`             | WBI parameter signing (mixin key + `w_rid`/`wts`)                                |
+| `src/lib/bilibili-api.ts`    | UGC + bangumi playurl API clients                                                |
+| `src/lib/download.ts`        | Normal + advanced (merge) download flows                                         |
+| `src/lib/ffmpeg.ts`          | WASM FFmpeg audio/video merge                                                    |
+| `src/lib/host.ts`            | Shadow-DOM helper UI                                                             |
+| `src/lib/schemas.ts`         | Zod schemas (DashData, DurlSegment, ErrorCode, etc.)                             |
+| `vite.content.config.ts`     | Vite config for the content-script bundle                                        |
+| `tsconfig.content.json`      | Standalone tsconfig for content-script type-checking                             |
+| `static/manifest.json`       | MV3 manifest                                                                     |
+| `build/`                     | Built extension output (load as unpacked)                                        |
 
 See [`AGENTS.md`](./AGENTS.md) for the full agent development guide.

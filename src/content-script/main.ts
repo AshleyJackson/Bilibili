@@ -14,8 +14,20 @@ import { showDownloadInfo, log, clearLogs } from '$lib/host';
 import { fetchUgcPlayUrl, fetchBangumiPlayUrl } from '$lib/bilibili-api';
 import type { PlayUrlResult } from '$lib/bilibili-api';
 import { logInfo, logWarn, logError } from '$lib/logger';
+import { dispatchContentScriptError } from '$lib/sentry-reporting';
 
 const MODULE = 'main';
+
+window.addEventListener('error', (event) => {
+	if (!event.filename.includes('bilibili-helper-content-script')) return;
+	dispatchContentScriptError(event.error ?? event.message, 'runtime');
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+	const stack = event.reason instanceof Error ? event.reason.stack ?? '' : '';
+	if (!stack.includes('bilibili-helper-content-script')) return;
+	dispatchContentScriptError(event.reason, 'runtime');
+});
 
 // ── Types ──
 

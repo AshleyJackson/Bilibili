@@ -1,0 +1,156 @@
+name: Publish Chrome Extension
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "static/manifest.json"
+      - ".github/workflows/publish-chrome-extension.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chrome-extension-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Check extension version
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
+      version: ${{ steps.compare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compare manifest versions
+        id: compare
+        env:
+          BASE_SHA: ${{ github.event.before }}
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          manifest_path = "static/manifest.json"
+          manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+          version = manifest.get("version")
+          if not isinstance(version, str) or not version:
+              raise SystemExit(f"{manifest_path} must contain a non-empty version string")
+
+          base_sha = os.environ.get("BASE_SHA", "").strip()
+          previous_version = None
+          if base_sha and set(base_sha) != {"0"}:
+              try:
+                  previous_manifest = subprocess.check_output(
+                      ["git", "show", f"{base_sha}:{manifest_path}"],
+                      text=True,
+                      stderr=subprocess.DEVNULL,
+                  )
+                  previous_version = json.loads(previous_manifest).get("version")
+              except (subprocess.CalledProcessError, json.JSONDecodeError):
+                  pass
+
+          changed = previous_version is not None and previous_version != version
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"changed={'true' if changed else 'false'}\n")
+              output.write(f"version={version}\n")
+
+          if changed:
+              summary = f"Manifest version changed: {previous_version} → {version}. Publishing is enabled."
+          else:
+              summary = f"Manifest version did not change (previous: {previous_version or 'unavailable'}, current: {version}). Publishing is skipped."
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
+              output.write(f"## Chrome extension release\n\n{summary}\n")
+          print(summary)
+          PY
+
+  publish:
+    name: Build and publish
+    needs: version
+    if: needs.version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify publishing secrets
+        env:
+          VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+          CHROME_WEB_STORE_EXTENSION_ID: ${{ secrets.CHROME_WEB_STORE_EXTENSION_ID }}
+          CHROME_WEB_STORE_PUBLISHER_ID: ${{ secrets.CHROME_WEB_STORE_PUBLISHER_ID }}
+          CHROME_WEB_STORE_CLIENT_ID: ${{ secrets.CHROME_WEB_STORE_CLIENT_ID }}
+          CHROME_WEB_STORE_CLIENT_SECRET: ${{ secrets.CHROME_WEB_STORE_CLIENT_SECRET }}
+          CHROME_WEB_STORE_REFRESH_TOKEN: ${{ secrets.CHROME_WEB_STORE_REFRESH_TOKEN }}
+        run: |
+          missing=()
+          for name in \
+            VITE_SENTRY_DSN \
+            CHROME_WEB_STORE_EXTENSION_ID \
+            CHROME_WEB_STORE_PUBLISHER_ID \
+            CHROME_WEB_STORE_CLIENT_ID \
+            CHROME_WEB_STORE_CLIENT_SECRET \
+            CHROME_WEB_STORE_REFRESH_TOKEN
+          do
+            if [[ -z "${!name}" ]]; then
+              missing+=("$name")
+            fi
+          done
+
+          if ((${#missing[@]})); then
+            printf '::error::Missing repository secrets: %s\n' "${missing[*]}"
+            exit 1
+          fi
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Sync SvelteKit
+        run: bunx svelte-kit sync
+
+      - name: Type-check content scripts
+        run: bunx tsc --noEmit -p tsconfig.content.json
+
+      - name: Type-check extension
+        run: bunx tsc --noEmit -p tsconfig.json
+
+      - name: Run tests
+        run: bunx vitest run
+
+      - name: Build and package extension
+        env:
+          VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          bun run build:all
+          cd build
+          zip -qr "../bilibili-extension-${RELEASE_VERSION}.zip" . -x '.*' -x '*/.*'
+
+      - name: Upload and publish to Chrome Web Store
+        uses: mnao305/chrome-extension-upload@v7.0.0
+        with:
+          file-path: bilibili-extension-${{ needs.version.outputs.version }}.zip
+          extension-id: ${{ secrets.CHROME_WEB_STORE_EXTENSION_ID }}
+          publisher-id: ${{ secrets.CHROME_WEB_STORE_PUBLISHER_ID }}
+          client-id: ${{ secrets.CHROME_WEB_STORE_CLIENT_ID }}
+          client-secret: ${{ secrets.CHROME_WEB_STORE_CLIENT_SECRET }}
+          refresh-token: ${{ secrets.CHROME_WEB_STORE_REFRESH_TOKEN }}
+          publish: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.version }}
+          name: ${{ needs.version.outputs.version }}
+          files: bilibili-extension-${{ needs.version.outputs.version }}.zip
+          generate_release_notes: true
+          draft: false
+          prerelease: false
