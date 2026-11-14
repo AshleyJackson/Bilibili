@@ -5,7 +5,8 @@
 	"scripts": {
 		"dev": "vite dev",
 		"build:content": "svelte-kit sync && vite build --config vite.content.config.ts --mode seed && vite build --config vite.content.config.ts --mode main && cp node_modules/@ffmpeg/core/dist/esm/ffmpeg-core.{js,wasm} static/",
-		"build": "vite build && cp node_modules/@ffmpeg/core/dist/esm/ffmpeg-core.{js,wasm} build/",
+		"build:worker": "svelte-kit sync && vite build --config vite.content.config.ts --mode worker",
+		"build": "bun run build:worker && vite build && cp node_modules/@ffmpeg/core/dist/esm/ffmpeg-core.{js,wasm} build/",
 		"build:all": "bun run build:content && bun run build",
 		"preview": "vite preview",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
@@ -13,7 +14,7 @@
 		"test:unit": "vitest",
 		"lint": "prettier --plugin-search-dir . --check . && eslint .",
 		"format": "prettier --plugin-search-dir . --write .",
-		"package": "bun run build && cd build && zip -r ../extension.zip . -x '.*'"
+		"package": "bun run build:all && cd build && zip -r ../extension.zip . -x '.*'"
 	},
 	"devDependencies": {
 		"@floating-ui/dom": "^1.8.0",
@@ -51,6 +52,7 @@
 		"@ffmpeg/core": "^0.12.10",
 		"@ffmpeg/ffmpeg": "^0.12.15",
 		"@o7/icon": "^0.3.94",
+		"@sentry/browser": "^11.12.0",
 		"@types/node": "^26.1.1",
 		"js-md5": "^0.8.3",
 		"zod": "^4.4.3"

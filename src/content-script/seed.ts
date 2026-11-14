@@ -1,10 +1,36 @@
 import { HOST_ELEMENT_ID, CONTENT_SCRIPT_ELEMENT_ID } from '$lib/constants';
+import {
+	CONTENT_SCRIPT_ERROR_EVENT,
+	forwardContentScriptErrorMessage,
+	isSentryErrorMessage,
+	reportErrorToSentry
+} from '$lib/sentry-reporting';
 
 // This runs in the content script isolated world.
 // It injects a <script> tag into the page so we can interact with Bilibili's JS context.
 
 (function (win: Window) {
 	const ns = '[bilibili downloader]';
+
+	win.addEventListener(CONTENT_SCRIPT_ERROR_EVENT, (event) => {
+		const message = (event as CustomEvent<unknown>).detail;
+		if (!isSentryErrorMessage(message) || !message.error.stack?.includes('bilibili-helper-content-script')) {
+			return;
+		}
+
+		forwardContentScriptErrorMessage(message);
+	});
+
+	win.addEventListener('error', (event) => {
+		if (!event.filename.includes('bilibili-helper-content-script-seed')) return;
+		reportErrorToSentry(event.error ?? event.message, 'content-script', 'seed');
+	});
+
+	win.addEventListener('unhandledrejection', (event) => {
+		const stack = event.reason instanceof Error ? (event.reason.stack ?? '') : '';
+		if (!stack.includes('bilibili-helper-content-script-seed')) return;
+		reportErrorToSentry(event.reason, 'content-script', 'seed');
+	});
 
 	console.log(ns, '[seed] seed script running', { url: win.location.href });
 
@@ -35,5 +61,8 @@ import { HOST_ELEMENT_ID, CONTENT_SCRIPT_ELEMENT_ID } from '$lib/constants';
 	script.src = chrome.runtime.getURL('bilibili-helper-content-script.js') + `?v=${version}`;
 
 	(doc.head || doc.documentElement).appendChild(script);
-	console.log(ns, '[seed] main script injected', { id: script.id, src: script.src });
+	console.log(ns, '[seed] main script injected', {
+		id: script.id,
+		src: script.src
+	});
 })(window);

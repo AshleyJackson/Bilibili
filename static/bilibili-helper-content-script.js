@@ -4459,7 +4459,57 @@ var FFFSType;
 	FFFSType["PROXYFS"] = "PROXYFS";
 })(FFFSType || (FFFSType = {}));
 //#endregion
+//#region src/lib/sentry-reporting.ts
+var SENTRY_ERROR_MESSAGE_TYPE = "bilibili-helper:sentry-error";
+var CONTENT_SCRIPT_ERROR_EVENT = "bilibili-helper:sentry-page-error";
+var MAX_NAME_LENGTH = 100;
+var MAX_MESSAGE_LENGTH = 2e3;
+var MAX_STACK_LENGTH = 12e3;
+var MODULE_PATTERN = /^[a-zA-Z0-9_.-]{1,80}$/;
+function serializeSentryError(error) {
+	let name = "Error";
+	let message;
+	let stack;
+	if (error instanceof Error) {
+		name = error.name || name;
+		message = error.message || name;
+		stack = error.stack;
+	} else if (typeof error === "string") message = error;
+	else try {
+		message = String(error);
+	} catch {
+		message = "Unknown error";
+	}
+	return {
+		name: name.slice(0, MAX_NAME_LENGTH),
+		message: message.slice(0, MAX_MESSAGE_LENGTH),
+		...typeof stack === "string" ? { stack: stack.slice(0, MAX_STACK_LENGTH) } : {}
+	};
+}
+function createSentryErrorMessage(error, source, module) {
+	return {
+		type: SENTRY_ERROR_MESSAGE_TYPE,
+		source,
+		...module && MODULE_PATTERN.test(module) ? { module } : {},
+		error: serializeSentryError(error)
+	};
+}
+function dispatchContentScriptError(error, module) {
+	if (typeof window === "undefined") return;
+	const message = createSentryErrorMessage(error, "content-script", module);
+	window.dispatchEvent(new CustomEvent(CONTENT_SCRIPT_ERROR_EVENT, { detail: message }));
+}
+//#endregion
 //#region src/lib/logger.ts
+/**
+* Structured logger for the Bilibili download helper extension.
+*
+* Provides module-prefixed logging at three severity levels (info, warn, error)
+* and writes to both the browser console and the in-page UI log panel.
+*
+* Use instead of raw console.log / the host.ts `log()` function directly,
+* so every log message carries a module tag and timestamp for debugging.
+*/
 var LEVEL_PREFIX = {
 	info: "",
 	warn: "[WARN]",
@@ -4513,6 +4563,8 @@ function logWarn(module, ...args) {
 }
 function logError(module, ...args) {
 	log$1(module, "error", ...args);
+	const error = args.find((arg) => arg instanceof Error);
+	if (error) dispatchContentScriptError(error, module);
 }
 /**
 * Convenience: log a fetch attempt including URL method, status code, and duration.
@@ -6632,6 +6684,14 @@ async function fetchBangumiPlayUrl(epId, cid, quality = 120) {
 //#endregion
 //#region src/content-script/main.ts
 var MODULE = "main";
+window.addEventListener("error", (event) => {
+	if (!event.filename.includes("bilibili-helper-content-script")) return;
+	dispatchContentScriptError(event.error ?? event.message, "runtime");
+});
+window.addEventListener("unhandledrejection", (event) => {
+	if (!(event.reason instanceof Error ? event.reason.stack ?? "" : "").includes("bilibili-helper-content-script")) return;
+	dispatchContentScriptError(event.reason, "runtime");
+});
 var appState = {
 	videoInfo: null,
 	interval: 0
