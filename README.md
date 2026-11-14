@@ -60,13 +60,12 @@ To publish a release, bump the `version` in `static/manifest.json` and push the 
 Before the first release, add these repository Actions secrets:
 
 - `VITE_SENTRY_DSN`
-- `CHROME_WEB_STORE_EXTENSION_ID`
 - `CHROME_WEB_STORE_PUBLISHER_ID`
 - `CHROME_WEB_STORE_CLIENT_ID`
 - `CHROME_WEB_STORE_CLIENT_SECRET`
 - `CHROME_WEB_STORE_REFRESH_TOKEN`
 
-The workflow fails before building if any required secret is missing. The GitHub Release uses the workflow's built-in `GITHUB_TOKEN`.
+Set `CHROME_WEB_STORE_EXTENSION_ID` as a repository Actions variable. The workflow fails before building if any required secret or variable is missing. The GitHub Release uses the workflow's built-in `GITHUB_TOKEN`.
 
 ## Testing
 
