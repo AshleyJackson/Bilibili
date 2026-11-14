@@ -3,7 +3,7 @@ import { ErrorCode } from './schemas';
 import type { DashData, DashStream, DurlSegment } from './schemas';
 import { signWbi, clearWbiKeys, fetchWbiKeys } from './wbi';
 import { extractInitialState } from './bilibili-types';
-import { logInfo, logWarn, logError, logDuration, logFetch } from './logger';
+import { logInfo, logWarn, logError, logFetch } from './logger';
 
 const MODULE = 'api';
 

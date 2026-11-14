@@ -46,9 +46,6 @@ const appState: { videoInfo: BangumiVideoInfo | null; interval: number } = {
 	interval: 0
 };
 
-const pendingBlobUrls = new Set<string>();
-const pendingUsedFiles = new Set<string>();
-
 // ── Quality resolution ──
 
 async function getQualityFromPlayer(): Promise<number | null> {

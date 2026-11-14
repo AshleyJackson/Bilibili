@@ -8,6 +8,7 @@
 		"skipLibCheck": true,
 		"sourceMap": false,
 		"strict": true,
+		"noUnusedLocals": true,
 		"moduleResolution": "bundler",
 		"module": "esnext",
 		"target": "esnext",

@@ -6,10 +6,8 @@
  * on click.
  */
 
-import { HOST_ELEMENT_ID, QUALITY_LABELS } from './constants';
 import { isAdvancedMode, isMergeMode, downloadBlob } from './utils';
 import { ErrorCode } from './schemas';
-import type { PlayUrlResult } from './bilibili-api';
 import type { DurlSegment, DashStream } from './schemas';
 import {
 	createNormalDownloadLink,
@@ -23,7 +21,7 @@ import {
 	extensionForUrl,
 	type SegmentDescriptor
 } from './downloader/orchestration';
-import { logInfo, logWarn, logError } from './logger';
+import { logInfo, logWarn } from './logger';
 
 const MODULE = 'host';
 

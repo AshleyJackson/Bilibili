@@ -2,7 +2,7 @@ import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { FFMPEG_WORKER, FFMPEG_CORE_JS, FFMPEG_CORE_WASM } from './constants';
 import { fetchAsBlob } from './fetch-utils';
 import { toUint8Array } from './fetch-utils';
-import { logInfo, logWarn, logError } from './logger';
+import { logInfo, logError } from './logger';
 
 let ffmpegInstance: FFmpeg | null = null;
 const usedFiles = new Set<string>();
