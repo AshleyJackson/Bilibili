@@ -1,11 +1,13 @@
 import * as Sentry from '@sentry/browser';
 import {
+	createSentryReportRateLimiter,
 	isSentryErrorMessage,
 	sanitizeSentryEvent,
 	SENTRY_ERROR_MESSAGE_TYPE
 } from '$lib/sentry-reporting';
 
 const dsn = import.meta.env.VITE_SENTRY_DSN;
+const allowReport = createSentryReportRateLimiter();
 
 if (dsn) {
 	Sentry.init({
@@ -25,9 +27,6 @@ if (dsn) {
 	});
 }
 
-let rateWindowStart = Date.now();
-let reportsInWindow = 0;
-
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 	if (
 		sender.id !== chrome.runtime.id ||
@@ -42,15 +41,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 		return;
 	}
 
-	if (Date.now() - rateWindowStart >= 60_000) {
-		rateWindowStart = Date.now();
-		reportsInWindow = 0;
-	}
-	if (reportsInWindow >= 20) {
+	if (!allowReport(message.source)) {
 		sendResponse({ sent: false });
 		return;
 	}
-	reportsInWindow += 1;
 
 	Sentry.withScope((scope) => {
 		scope.setTag('source', message.source);

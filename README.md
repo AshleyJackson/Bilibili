@@ -41,7 +41,10 @@ Content scripts are built separately from the SvelteKit extension because they r
 # Build content scripts only (outputs to static/)
 bun run build:content
 
-# Build the SvelteKit extension (outputs to build/)
+# Build the MV3 service worker only (outputs to static/)
+bun run build:worker
+
+# Build the SvelteKit extension and its MV3 service worker (outputs to build/)
 bun run build
 
 # Build everything in the right order

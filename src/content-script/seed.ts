@@ -1,7 +1,7 @@
 import { HOST_ELEMENT_ID, CONTENT_SCRIPT_ELEMENT_ID } from '$lib/constants';
 import {
 	CONTENT_SCRIPT_ERROR_EVENT,
-	forwardSentryErrorMessage,
+	forwardContentScriptErrorMessage,
 	isSentryErrorMessage,
 	reportErrorToSentry
 } from '$lib/sentry-reporting';
@@ -14,15 +14,11 @@ import {
 
 	win.addEventListener(CONTENT_SCRIPT_ERROR_EVENT, (event) => {
 		const message = (event as CustomEvent<unknown>).detail;
-		if (
-			!isSentryErrorMessage(message) ||
-			message.source !== 'content-script' ||
-			!message.error.stack?.includes('bilibili-helper-content-script')
-		) {
+		if (!isSentryErrorMessage(message) || !message.error.stack?.includes('bilibili-helper-content-script')) {
 			return;
 		}
 
-		forwardSentryErrorMessage(message);
+		forwardContentScriptErrorMessage(message);
 	});
 
 	win.addEventListener('error', (event) => {
@@ -31,7 +27,7 @@ import {
 	});
 
 	win.addEventListener('unhandledrejection', (event) => {
-		const stack = event.reason instanceof Error ? event.reason.stack ?? '' : '';
+		const stack = event.reason instanceof Error ? (event.reason.stack ?? '') : '';
 		if (!stack.includes('bilibili-helper-content-script-seed')) return;
 		reportErrorToSentry(event.reason, 'content-script', 'seed');
 	});
@@ -65,5 +61,8 @@ import {
 	script.src = chrome.runtime.getURL('bilibili-helper-content-script.js') + `?v=${version}`;
 
 	(doc.head || doc.documentElement).appendChild(script);
-	console.log(ns, '[seed] main script injected', { id: script.id, src: script.src });
+	console.log(ns, '[seed] main script injected', {
+		id: script.id,
+		src: script.src
+	});
 })(window);

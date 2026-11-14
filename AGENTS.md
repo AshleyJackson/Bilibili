@@ -33,7 +33,8 @@ This is a **SvelteKit Chrome Extension** that downloads videos from bilibili.com
 
 - `bun run dev` — dev server
 - `bun run build:content` — build content scripts to `static/` (runs `svelte-kit sync` first for tsconfig)
-- `bun run build` — production build of the SvelteKit extension to `build/`
+- `bun run build:worker` — build the MV3 service worker to `static/`
+- `bun run build` — build the MV3 service worker and SvelteKit extension to `build/`
 - `bun run build:all` — `build:content` then `build`
 - `bun run package` — build + zip into `extension.zip`
 - `bun run test:unit` — run vitest tests

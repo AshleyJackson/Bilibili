@@ -58,8 +58,8 @@ function sendSentryErrorMessage(message) {
 function reportErrorToSentry(error, source, module) {
 	return sendSentryErrorMessage(createSentryErrorMessage(error, source, module));
 }
-function forwardSentryErrorMessage(value) {
-	if (isSentryErrorMessage(value)) return sendSentryErrorMessage(value);
+function forwardContentScriptErrorMessage(value) {
+	if (isSentryErrorMessage(value) && value.source === "content-script") return sendSentryErrorMessage(value);
 	return Promise.resolve(false);
 }
 //#endregion
@@ -68,8 +68,8 @@ function forwardSentryErrorMessage(value) {
 	const ns = "[bilibili downloader]";
 	win.addEventListener(CONTENT_SCRIPT_ERROR_EVENT, (event) => {
 		const message = event.detail;
-		if (!isSentryErrorMessage(message) || message.source !== "content-script" || !message.error.stack?.includes("bilibili-helper-content-script")) return;
-		forwardSentryErrorMessage(message);
+		if (!isSentryErrorMessage(message) || !message.error.stack?.includes("bilibili-helper-content-script")) return;
+		forwardContentScriptErrorMessage(message);
 	});
 	win.addEventListener("error", (event) => {
 		if (!event.filename.includes("bilibili-helper-content-script-seed")) return;

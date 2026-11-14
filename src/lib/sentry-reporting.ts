@@ -3,6 +3,12 @@ export const CONTENT_SCRIPT_ERROR_EVENT = 'bilibili-helper:sentry-page-error';
 
 export type SentryErrorSource = 'content-script' | 'extension-popup';
 
+export const SENTRY_REPORT_RATE_LIMITS: Readonly<Record<SentryErrorSource, number>> = {
+	'content-script': 5,
+	'extension-popup': 20
+};
+export const SENTRY_REPORT_RATE_WINDOW_MS = 60_000;
+
 export interface SerializedSentryError {
 	name: string;
 	message: string;
@@ -14,6 +20,33 @@ export interface SentryErrorMessage {
 	source: SentryErrorSource;
 	module?: string;
 	error: SerializedSentryError;
+}
+
+interface ReportRateWindow {
+	startedAt: number | null;
+	count: number;
+}
+
+export function createSentryReportRateLimiter(
+	limits: Readonly<Record<SentryErrorSource, number>> = SENTRY_REPORT_RATE_LIMITS,
+	windowMs = SENTRY_REPORT_RATE_WINDOW_MS
+): (source: SentryErrorSource, now?: number) => boolean {
+	const windows: Record<SentryErrorSource, ReportRateWindow> = {
+		'content-script': { startedAt: null, count: 0 },
+		'extension-popup': { startedAt: null, count: 0 }
+	};
+
+	return (source, now = Date.now()) => {
+		const window = windows[source];
+		if (window.startedAt === null || now - window.startedAt >= windowMs || now < window.startedAt) {
+			window.startedAt = now;
+			window.count = 0;
+		}
+		if (window.count >= limits[source]) return false;
+
+		window.count += 1;
+		return true;
+	};
 }
 
 const MAX_NAME_LENGTH = 100;
@@ -130,10 +163,7 @@ export function sanitizeSentryEvent<T>(event: T): T {
 		for (const frame of frames) {
 			if (!frame || typeof frame !== 'object') continue;
 			const frameRecord = frame as Record<string, unknown>;
-			if (
-				typeof frameRecord.filename === 'string' &&
-				/^https?:\/\//i.test(frameRecord.filename)
-			) {
+			if (typeof frameRecord.filename === 'string' && /^https?:\/\//i.test(frameRecord.filename)) {
 				frameRecord.filename = '[third-party script]';
 				delete frameRecord.abs_path;
 			}
@@ -148,23 +178,22 @@ function sendSentryErrorMessage(message: SentryErrorMessage): Promise<boolean> {
 	if (typeof chrome === 'undefined' || !chrome.runtime?.id) return Promise.resolve(false);
 
 	try {
-		return chrome.runtime.sendMessage(message).then((response) => response?.sent === true).catch(() => false);
+		return chrome.runtime
+			.sendMessage(message)
+			.then((response) => response?.sent === true)
+			.catch(() => false);
 	} catch {
 		// Error reporting must not affect extension behavior.
 		return Promise.resolve(false);
 	}
 }
 
-export function reportErrorToSentry(
-	error: unknown,
-	source: SentryErrorSource,
-	module?: string
-): Promise<boolean> {
+export function reportErrorToSentry(error: unknown, source: SentryErrorSource, module?: string): Promise<boolean> {
 	return sendSentryErrorMessage(createSentryErrorMessage(error, source, module));
 }
 
-export function forwardSentryErrorMessage(value: unknown): Promise<boolean> {
-	if (isSentryErrorMessage(value)) {
+export function forwardContentScriptErrorMessage(value: unknown): Promise<boolean> {
+	if (isSentryErrorMessage(value) && value.source === 'content-script') {
 		return sendSentryErrorMessage(value);
 	}
 	return Promise.resolve(false);

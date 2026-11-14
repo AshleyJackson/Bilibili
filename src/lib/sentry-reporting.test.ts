@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+	createSentryReportRateLimiter,
 	createSentryErrorMessage,
 	dispatchContentScriptError,
-	forwardSentryErrorMessage,
+	forwardContentScriptErrorMessage,
 	isSentryErrorMessage,
 	reportErrorToSentry,
 	sanitizeSentryEvent,
 	serializeSentryError,
+	SENTRY_REPORT_RATE_LIMITS,
 	SENTRY_ERROR_MESSAGE_TYPE
 } from './sentry-reporting';
 
@@ -59,11 +61,19 @@ describe('Sentry message validation and forwarding', () => {
 
 	it('forwards only valid reports to the extension service worker', async () => {
 		const sendMessage = vi.fn(() => Promise.resolve({ sent: true }));
-		vi.stubGlobal('chrome', { runtime: { id: 'extension-id', sendMessage } });
-		const message = createSentryErrorMessage('reported', 'extension-popup');
+		vi.stubGlobal('chrome', {
+			runtime: { id: 'extension-id', sendMessage }
+		});
+		const message = createSentryErrorMessage('reported', 'content-script');
 
-		await expect(forwardSentryErrorMessage(message)).resolves.toBe(true);
-		await expect(forwardSentryErrorMessage({ ...message, source: 'website' })).resolves.toBe(false);
+		await expect(forwardContentScriptErrorMessage(message)).resolves.toBe(true);
+		await expect(
+			forwardContentScriptErrorMessage({
+				...message,
+				source: 'extension-popup'
+			})
+		).resolves.toBe(false);
+		await expect(forwardContentScriptErrorMessage({ ...message, source: 'website' })).resolves.toBe(false);
 
 		expect(sendMessage).toHaveBeenCalledOnce();
 		expect(sendMessage).toHaveBeenCalledWith(message);
@@ -89,11 +99,46 @@ describe('Sentry message validation and forwarding', () => {
 	});
 });
 
+describe('createSentryReportRateLimiter', () => {
+	it('keeps page-origin reports from consuming the popup allowance', () => {
+		const allowReport = createSentryReportRateLimiter();
+		const contentLimit = SENTRY_REPORT_RATE_LIMITS['content-script'];
+		const popupLimit = SENTRY_REPORT_RATE_LIMITS['extension-popup'];
+
+		for (let report = 0; report < contentLimit; report += 1) {
+			expect(allowReport('content-script', report)).toBe(true);
+		}
+		expect(allowReport('content-script', contentLimit)).toBe(false);
+
+		for (let report = 0; report < popupLimit; report += 1) {
+			expect(allowReport('extension-popup', report)).toBe(true);
+		}
+		expect(allowReport('extension-popup', popupLimit)).toBe(false);
+		expect(allowReport('content-script', popupLimit + 1)).toBe(false);
+	});
+
+	it('resets each source allowance independently', () => {
+		const allowReport = createSentryReportRateLimiter({ 'content-script': 2, 'extension-popup': 2 }, 10);
+
+		expect(allowReport('content-script', 0)).toBe(true);
+		expect(allowReport('content-script', 1)).toBe(true);
+		expect(allowReport('content-script', 2)).toBe(false);
+		expect(allowReport('extension-popup', 2)).toBe(true);
+		expect(allowReport('extension-popup', 3)).toBe(true);
+		expect(allowReport('extension-popup', 4)).toBe(false);
+		expect(allowReport('content-script', 10)).toBe(true);
+		expect(allowReport('extension-popup', 11)).toBe(false);
+		expect(allowReport('extension-popup', 12)).toBe(true);
+	});
+});
+
 describe('sanitizeSentryEvent', () => {
 	it('removes request and user data and redacts page URLs', () => {
 		const event = {
 			message: 'Failed at https://www.bilibili.com/video/BV123?token=secret',
-			request: { url: 'https://www.bilibili.com/video/BV123?token=secret' },
+			request: {
+				url: 'https://www.bilibili.com/video/BV123?token=secret'
+			},
 			user: { ip_address: '127.0.0.1' },
 			extra: { videoTitle: 'private title' },
 			breadcrumbs: [{ message: 'visited video' }],
