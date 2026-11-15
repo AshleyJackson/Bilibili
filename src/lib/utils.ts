@@ -57,22 +57,12 @@ export function waitForElement(selector: string): Promise<Element | null> {
 
 // ── Convert file to Uint8Array ──
 
-export function fileToUint8Array(file: File | Blob): Promise<Uint8Array> {
-	return new Promise((resolve, reject) => {
-		const reader = new FileReader();
-		reader.onload = () => {
-			const { result } = reader;
-			if (result instanceof ArrayBuffer) {
-				resolve(new Uint8Array(result));
-			} else {
-				resolve(new Uint8Array());
-			}
-		};
-		reader.onerror = (ev) => {
-			reject(Error(`File could not be read! Code=${(ev?.target?.error as unknown as { code?: number })?.code ?? -1}`));
-		};
-		reader.readAsArrayBuffer(file);
-	});
+export async function fileToUint8Array(file: File | Blob): Promise<Uint8Array> {
+	try {
+		return new Uint8Array(await file.arrayBuffer());
+	} catch {
+		throw new Error('Unable to read file data. Please try the download again.');
+	}
 }
 
 // ── Download Blob ──

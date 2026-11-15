@@ -1,5 +1,6 @@
 import { STREAM_FETCH_DEFAULTS } from './constants';
 import { logInfo, logWarn, logError, logFetch } from './logger';
+import { fileToUint8Array } from './utils';
 
 const MODULE = 'fetch';
 
@@ -166,22 +167,4 @@ export async function toUint8Array(input: string | URL | File | Blob): Promise<U
 	}
 	logInfo(MODULE, 'toUint8Array: reading File/Blob', { type: input.type, size: input.size });
 	return fileToUint8Array(input);
-}
-
-function fileToUint8Array(file: File | Blob): Promise<Uint8Array> {
-	return new Promise((resolve, reject) => {
-		const reader = new FileReader();
-		reader.onload = () => {
-			const { result } = reader;
-			if (result instanceof ArrayBuffer) {
-				resolve(new Uint8Array(result));
-			} else {
-				resolve(new Uint8Array());
-			}
-		};
-		reader.onerror = (ev) => {
-			reject(Error(`File could not be read! Code=${(ev?.target?.error as unknown as { code?: number })?.code ?? -1}`));
-		};
-		reader.readAsArrayBuffer(file);
-	});
 }

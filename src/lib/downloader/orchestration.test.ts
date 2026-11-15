@@ -1,8 +1,15 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { downloadStream, streamToSegment, downloadDurlSegments, extensionForUrl, downloadAndMerge } from './orchestration';
-import { mergeAudioVideo } from '../ffmpeg';
+import {
+	downloadAndMerge,
+	downloadStream,
+	streamToSegment,
+	downloadDurlSegments,
+	extensionForUrl
+} from './orchestration';
 import { fetchStreamThroughExtension } from '../stream-download-client';
+import { mergeAudioVideo } from '../ffmpeg';
+import { CONTENT_SCRIPT_ELEMENT_ID } from '../constants';
 
 // Silence the logger
 vi.mock('../logger', () => ({
@@ -26,10 +33,12 @@ vi.mock('../stream-download-client', () => ({
 }));
 
 const extensionFetchMock = vi.mocked(fetchStreamThroughExtension);
+const mergeAudioVideoMock = vi.mocked(mergeAudioVideo);
 
 beforeEach(() => {
 	vi.restoreAllMocks();
 	extensionFetchMock.mockReset();
+	mergeAudioVideoMock.mockReset().mockResolvedValue([new ArrayBuffer(8), () => {}]);
 });
 
 describe('streamToSegment', () => {
@@ -145,6 +154,49 @@ describe('downloadDurlSegments', () => {
 });
 
 describe('downloadAndMerge', () => {
+	function addInternals(): void {
+		document.getElementById(CONTENT_SCRIPT_ELEMENT_ID)?.remove();
+		const el = document.createElement('div');
+		el.id = CONTENT_SCRIPT_ELEMENT_ID;
+		el.dataset.internals = JSON.stringify({
+			manifest: { name: 'Bilibili helper', version: '3.2.0' },
+			baseUrl: 'chrome-extension://extension-id'
+		});
+		document.body.appendChild(el);
+	}
+
+	function mockDownloadedStreams(): void {
+		extensionFetchMock.mockImplementation(async () => new Response(new Uint8Array([1, 2])));
+	}
+
+	it('passes downloaded Blobs directly to FFmpeg', async () => {
+		addInternals();
+		mockDownloadedStreams();
+
+		const result = await downloadAndMerge({
+			audio: { url: 'https://cdn.example/audio.m4s' },
+			video: { url: 'https://cdn.example/video.m4s' }
+		});
+
+		expect(result.data).toBeInstanceOf(ArrayBuffer);
+		expect(mergeAudioVideo).toHaveBeenCalledOnce();
+		expect(mergeAudioVideo).toHaveBeenCalledWith('chrome-extension://extension-id', expect.any(Blob), expect.any(Blob));
+	});
+
+	it('propagates merge read failures for the existing UI error handler', async () => {
+		addInternals();
+		mockDownloadedStreams();
+		const readError = new Error('Unable to read file data. Please try the download again.');
+		mergeAudioVideoMock.mockRejectedValueOnce(readError);
+
+		await expect(
+			downloadAndMerge({
+				audio: { url: 'https://cdn.example/audio.m4s' },
+				video: { url: 'https://cdn.example/video.m4s' }
+			})
+		).rejects.toBe(readError);
+	});
+
 	it('signals the merge phase after both streams finish and before FFmpeg runs', async () => {
 		const order: string[] = [];
 		extensionFetchMock.mockImplementation(
@@ -160,15 +212,11 @@ describe('downloadAndMerge', () => {
 				return { ok: true, status: 200, headers: new Headers({ 'content-length': '1' }), body: stream } as Response;
 			})
 		);
-		vi.mocked(mergeAudioVideo).mockImplementationOnce(async () => {
+		mergeAudioVideoMock.mockImplementationOnce(async () => {
 			order.push('merge');
 			return [new ArrayBuffer(4), () => {}];
 		});
-		const el = document.createElement('div');
-		el.id = 'bilibili-helper-ext-content-script';
-		el.dataset.internals = JSON.stringify({ manifest: {}, baseUrl: 'chrome-extension://id' });
-		document.body.appendChild(el);
-		URL.createObjectURL = vi.fn(() => 'blob:x');
+		addInternals();
 		const progress = vi.fn();
 
 		const result = await downloadAndMerge(
@@ -181,7 +229,6 @@ describe('downloadAndMerge', () => {
 		expect(progress).toHaveBeenCalledWith('audio', 1, 1);
 		expect(progress).toHaveBeenCalledWith('video', 1, 1);
 		expect(result.data.byteLength).toBe(4);
-		el.remove();
 	});
 });
 

@@ -62,11 +62,7 @@ async function getFFmpeg(baseUrl: string): Promise<FFmpeg> {
 /**
  * Merge audio and video using FFmpeg, return the merged data buffer.
  */
-export async function mergeAudioVideo(
-	baseUrl: string,
-	audioUrl: string,
-	videoUrl: string
-): Promise<[ArrayBuffer, () => void]> {
+export async function mergeAudioVideo(baseUrl: string, audio: Blob, video: Blob): Promise<[ArrayBuffer, () => void]> {
 	logInfo('ffmpeg', 'mergeAudioVideo: starting merge');
 	const ffmpeg = await getFFmpeg(baseUrl);
 	const ts = `${Date.now()}${Math.random()}`;
@@ -75,9 +71,9 @@ export async function mergeAudioVideo(
 	const mergedFile = `${ts}_merged.mp4`;
 
 	logInfo('ffmpeg', `writing audio file (${audioFile})`);
-	await ffmpeg.writeFile(audioFile, await toUint8Array(audioUrl));
+	await ffmpeg.writeFile(audioFile, await toUint8Array(audio));
 	logInfo('ffmpeg', `writing video file (${videoFile})`);
-	await ffmpeg.writeFile(videoFile, await toUint8Array(videoUrl));
+	await ffmpeg.writeFile(videoFile, await toUint8Array(video));
 
 	logInfo('ffmpeg', 'executing ffmpeg merge command');
 	await ffmpeg.exec(['-i', videoFile, '-i', audioFile, '-vcodec', 'copy', '-acodec', 'copy', mergedFile]);

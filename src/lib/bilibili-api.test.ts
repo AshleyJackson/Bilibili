@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { fetchUgcPlayUrl, fetchBangumiPlayUrl } from './bilibili-api';
 import { UGC_PLAY_URL_API, BANGUMI_PLAY_URL_API } from './constants';
+import { ErrorCode } from './schemas';
 import type { DashData } from './schemas';
 
 // Sample DASH response data shared by both endpoints.
@@ -10,7 +11,7 @@ const sampleDash: DashData = {
 	video: [{ id: 120, base_url: 'https://upos-sz-mirror.bilivideo.com/video.m4s', backup_url: ['https://bak.bilivideo.com/video.m4s'], codecid: 7, size: 2000 }]
 };
 
-function makeUgcResponse(dash = sampleDash): unknown {
+function makeUgcResponse(dash: unknown = sampleDash): unknown {
 	return {
 		code: 0,
 		data: {
@@ -23,7 +24,7 @@ function makeUgcResponse(dash = sampleDash): unknown {
 	};
 }
 
-function makeBangumiResponse(dash = sampleDash): unknown {
+function makeBangumiResponse(dash: unknown = sampleDash): unknown {
 	return {
 		code: 0,
 		result: {
@@ -145,6 +146,33 @@ describe('fetchUgcPlayUrl', () => {
 		expect(result.code).toBe(-10403);
 		expect(result.message).toContain('大会员');
 	});
+
+	it.each([
+		['null audio', { audio: null, video: sampleDash.video }],
+		['malformed audio entry', { audio: [null], video: sampleDash.video }],
+		['null video', { audio: sampleDash.audio, video: null }]
+	])('returns INVALID_RESPONSE for DASH with %s', async (_field, dash) => {
+		mockFetch((url) => {
+			if (url.includes('/nav'))
+				return {
+					code: 0,
+					data: {
+						wbi_img: {
+							img_url: 'https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png',
+							sub_url: 'https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png'
+						}
+					}
+				};
+			return makeUgcResponse(dash);
+		});
+
+		const result = await fetchUgcPlayUrl(12345, undefined, 67890, 120);
+
+		expect(result).toEqual({
+			code: ErrorCode.INVALID_RESPONSE,
+			message: '该视频暂时不支持下载'
+		});
+	});
 });
 
 describe('fetchBangumiPlayUrl', () => {
@@ -192,5 +220,20 @@ describe('fetchBangumiPlayUrl', () => {
 
 		const result = await fetchBangumiPlayUrl(123456, 67890, 120);
 		expect(result.code).toBe(-10403);
+	});
+
+	it.each([
+		['null audio', { audio: null, video: sampleDash.video }],
+		['malformed audio entry', { audio: [null], video: sampleDash.video }],
+		['null video', { audio: sampleDash.audio, video: null }]
+	])('returns INVALID_RESPONSE for DASH with %s', async (_field, dash) => {
+		mockFetch(() => makeBangumiResponse(dash));
+
+		const result = await fetchBangumiPlayUrl(123456, 67890, 120);
+
+		expect(result).toEqual({
+			code: ErrorCode.INVALID_RESPONSE,
+			message: '该视频暂时不支持下载'
+		});
 	});
 });

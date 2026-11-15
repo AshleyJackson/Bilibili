@@ -116,9 +116,24 @@ describe('waitForElement', () => {
 });
 
 describe('file and blob utilities', () => {
-	it('reads Blob bytes through FileReader', async () => {
+	it('reads Blob bytes through arrayBuffer', async () => {
 		const bytes = await fileToUint8Array(new Blob([new Uint8Array([1, 2, 255])]));
 		expect(Array.from(bytes)).toEqual([1, 2, 255]);
+	});
+
+	it('rejects failed reads with a stable message and no underlying details', async () => {
+		const blob = new Blob([new Uint8Array([1])]);
+		vi.spyOn(blob, 'arrayBuffer').mockRejectedValue(new Error('sensitive underlying detail'));
+
+		let error: unknown;
+		try {
+			await fileToUint8Array(blob);
+		} catch (err) {
+			error = err;
+		}
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toBe('Unable to read file data. Please try the download again.');
+		expect((error as Error).message).not.toContain('sensitive underlying detail');
 	});
 
 	it('saves a blob through a download anchor and returns its object URL', () => {

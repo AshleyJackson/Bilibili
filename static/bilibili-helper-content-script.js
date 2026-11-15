@@ -4112,6 +4112,13 @@ function waitForElement(selector) {
 		}, 300);
 	});
 }
+async function fileToUint8Array(file) {
+	try {
+		return new Uint8Array(await file.arrayBuffer());
+	} catch {
+		throw new Error("Unable to read file data. Please try the download again.");
+	}
+}
 /**
 * Trigger a browser save for `blob` and return its object URL. The caller owns
 * the URL (it backs the "save again" link) and must revoke it when done.
@@ -4487,9 +4494,11 @@ function createSentryErrorMessage(error, source, module) {
 	};
 }
 var UBLOCK_PREVENT_FETCH_FRAME = /chrome-extension:\/\/[^/\s]+\/rulesets\/scripting\/scriptlet\/ublock-filters\.prevent-fetch\.js/i;
+var UNSUPPORTED_BILIBILI_STREAM_URL_ERROR = "Unsupported Bilibili stream URL";
 function dispatchContentScriptError(error, module) {
 	if (typeof window === "undefined") return;
 	if (error instanceof Error && UBLOCK_PREVENT_FETCH_FRAME.test(error.stack ?? "")) return;
+	if (error instanceof Error && error.message === UNSUPPORTED_BILIBILI_STREAM_URL_ERROR || error === UNSUPPORTED_BILIBILI_STREAM_URL_ERROR) return;
 	const message = createSentryErrorMessage(error, "content-script", module);
 	window.dispatchEvent(new CustomEvent(CONTENT_SCRIPT_ERROR_EVENT, { detail: message }));
 }
@@ -4704,20 +4713,6 @@ async function toUint8Array(input) {
 	});
 	return fileToUint8Array(input);
 }
-function fileToUint8Array(file) {
-	return new Promise((resolve, reject) => {
-		const reader = new FileReader();
-		reader.onload = () => {
-			const { result } = reader;
-			if (result instanceof ArrayBuffer) resolve(new Uint8Array(result));
-			else resolve(/* @__PURE__ */ new Uint8Array());
-		};
-		reader.onerror = (ev) => {
-			reject(Error(`File could not be read! Code=${(ev?.target?.error)?.code ?? -1}`));
-		};
-		reader.readAsArrayBuffer(file);
-	});
-}
 //#endregion
 //#region src/lib/ffmpeg.ts
 var ffmpegInstance = null;
@@ -4763,7 +4758,7 @@ async function getFFmpeg(baseUrl) {
 /**
 * Merge audio and video using FFmpeg, return the merged data buffer.
 */
-async function mergeAudioVideo(baseUrl, audioUrl, videoUrl) {
+async function mergeAudioVideo(baseUrl, audio, video) {
 	logInfo("ffmpeg", "mergeAudioVideo: starting merge");
 	const ffmpeg = await getFFmpeg(baseUrl);
 	const ts = `${Date.now()}${Math.random()}`;
@@ -4771,9 +4766,9 @@ async function mergeAudioVideo(baseUrl, audioUrl, videoUrl) {
 	const videoFile = `${ts}_video.mp4`;
 	const mergedFile = `${ts}_merged.mp4`;
 	logInfo("ffmpeg", `writing audio file (${audioFile})`);
-	await ffmpeg.writeFile(audioFile, await toUint8Array(audioUrl));
+	await ffmpeg.writeFile(audioFile, await toUint8Array(audio));
 	logInfo("ffmpeg", `writing video file (${videoFile})`);
-	await ffmpeg.writeFile(videoFile, await toUint8Array(videoUrl));
+	await ffmpeg.writeFile(videoFile, await toUint8Array(video));
 	logInfo("ffmpeg", "executing ffmpeg merge command");
 	await ffmpeg.exec([
 		"-i",
@@ -5037,6 +5032,7 @@ async function fetchOne(url, onProgress, signal, maxRetries = 2) {
 			response = await fetchStreamThroughExtension(url, signal);
 		} catch (err) {
 			if (signal?.aborted) throw err;
+			if (err instanceof Error && err.message === "Unsupported Bilibili stream URL") throw err;
 			if (attempt < maxRetries) {
 				const delay = Math.min(1e3 * Math.pow(2, attempt), 1e4);
 				logWarn(MODULE$5, `network error, retry ${attempt + 1}/${maxRetries} in ${delay}ms`, {
@@ -5123,6 +5119,7 @@ async function fetchOne(url, onProgress, signal, maxRetries = 2) {
 async function fetchSegment(urls, onProgress, signal) {
 	if (urls.length === 0) throw new Error("fetchSegment: no URLs provided");
 	let lastErr;
+	const failures = [];
 	for (let i = 0; i < urls.length; i++) {
 		const url = urls[i];
 		if (i > 0) logWarn(MODULE$5, `trying backup URL ${i}`, { url: url.slice(0, 80) });
@@ -5132,12 +5129,30 @@ async function fetchSegment(urls, onProgress, signal) {
 				usedUrl: url
 			};
 		} catch (err) {
+			if (signal?.aborted || err instanceof Error && err.name === "AbortError") throw err;
 			lastErr = err;
-			logError(MODULE$5, `fetch failed for URL ${i}`, { url: url.slice(0, 80) }, err);
-			if (signal?.aborted) throw err;
+			const error = err instanceof Error ? err.message : String(err);
+			const statusMatch = /^HTTP (\d+)/.exec(error);
+			const isUnsupportedUrl = error === "Unsupported Bilibili stream URL";
+			const failure = {
+				url: url.slice(0, 80),
+				type: statusMatch ? "http" : isUnsupportedUrl ? "validation" : "network",
+				...statusMatch ? { status: Number(statusMatch[1]) } : {},
+				error
+			};
+			failures.push(failure);
+			logWarn(MODULE$5, `fetch failed for URL ${i}`, failure);
 		}
 	}
-	throw new Error(`all segment URLs failed; last error: ${lastErr?.message ?? lastErr}`);
+	const lastErrorMessage = lastErr instanceof Error ? lastErr.message : String(lastErr);
+	const failureSummary = failures.map((failure) => failure.type === "http" ? `HTTP ${failure.status} at ${failure.url}: ${failure.error}` : failure.type === "validation" ? `invalid URL at ${failure.url}: ${failure.error}` : `network error at ${failure.url}: ${failure.error}`).join("; ");
+	if (failures.every((failure) => failure.type === "validation")) throw lastErr;
+	const terminalError = /* @__PURE__ */ new Error(`all segment URLs failed; ${failureSummary}; last error: ${lastErrorMessage}`);
+	logError(MODULE$5, "all segment URLs failed", {
+		candidateCount: urls.length,
+		failures
+	}, terminalError);
+	throw terminalError;
 }
 /**
 * Collect all candidate URLs for a stream into a flat array: primary first,
@@ -5203,7 +5218,7 @@ async function downloadAndMerge(segments, onProgress, onMerging) {
 	});
 	onMerging?.();
 	const { baseUrl } = getInternals();
-	const [data, cleanup] = await mergeAudioVideo(baseUrl, URL.createObjectURL(audioBlob), URL.createObjectURL(videoBlob));
+	const [data, cleanup] = await mergeAudioVideo(baseUrl, audioBlob, videoBlob);
 	logInfo(MODULE$4, "downloadAndMerge: merge complete", { mergedSize: data.byteLength });
 	return {
 		data,
@@ -8452,15 +8467,24 @@ function normalizeStream(stream) {
 	};
 }
 function buildDashResult(dash, quality, codecid) {
-	const video = dash.video.find((v) => `${v.codecid ?? ""}` === `${codecid}` && `${v.id}` === `${quality}`) ?? dash.video[0];
-	const audio = dash.audio[0];
-	if (!audio || !video) {
+	const parsedDash = DashDataSchema.safeParse(dash);
+	if (!parsedDash.success) {
+		logWarn(MODULE$1, "buildDashResult: invalid DASH data");
+		return {
+			code: ErrorCode.INVALID_RESPONSE,
+			message: "该视频暂时不支持下载"
+		};
+	}
+	const { audio, video: videos } = parsedDash.data;
+	const video = videos.find((v) => `${v.codecid ?? ""}` === `${codecid}` && `${v.id}` === `${quality}`) ?? videos[0];
+	const audioStream = audio[0];
+	if (!audioStream || !video) {
 		logWarn(MODULE$1, "buildDashResult: no matching audio/video", {
 			quality,
 			codecid,
-			audioCount: dash.audio.length,
-			videoCount: dash.video.length,
-			videoIds: dash.video.map((v) => v.id)
+			audioCount: audio.length,
+			videoCount: videos.length,
+			videoIds: videos.map((v) => v.id)
 		});
 		return {
 			code: ErrorCode.INVALID_RESPONSE,
@@ -8470,13 +8494,13 @@ function buildDashResult(dash, quality, codecid) {
 	logInfo(MODULE$1, "buildDashResult: matched", {
 		videoId: video.id,
 		videoCodecid: video.codecid,
-		audioId: audio.id,
+		audioId: audioStream.id,
 		qualityLabel: QUALITY_LABELS[video.id] ?? ""
 	});
 	return {
 		code: ErrorCode.OK,
 		dash: {
-			audio: normalizeStream(audio),
+			audio: normalizeStream(audioStream),
 			video: normalizeStream(video)
 		},
 		qualityDescription: QUALITY_LABELS[video.id] ?? ""
