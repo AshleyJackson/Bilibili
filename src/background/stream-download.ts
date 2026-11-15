@@ -25,7 +25,8 @@ function isAuthorizedSender(port: chrome.runtime.Port, extensionId: string): boo
 export function attachStreamDownloadPort(
 	port: chrome.runtime.Port,
 	extensionId: string,
-	fetchImpl: typeof fetch = fetch
+	fetchImpl: typeof fetch = fetch,
+	refererRuleReady: Promise<boolean> = Promise.resolve(true)
 ): void {
 	if (port.name !== STREAM_FETCH_PORT_NAME) return;
 	if (!isAuthorizedSender(port, extensionId)) {
@@ -78,6 +79,13 @@ export function attachStreamDownloadPort(
 
 	const streamResponse = async (url: string): Promise<void> => {
 		try {
+			if (!(await refererRuleReady)) {
+				throw new Error('Could not configure the Bilibili CDN Referer header');
+			}
+			if (controller.signal.aborted) {
+				finish({ type: 'error', message: 'Download aborted' });
+				return;
+			}
 			const response = await fetchImpl(url, {
 				...STREAM_FETCH_DEFAULTS,
 				signal: controller.signal
