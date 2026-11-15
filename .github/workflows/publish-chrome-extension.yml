@@ -83,6 +83,7 @@ jobs:
       - name: Verify publishing secrets
         env:
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           CHROME_WEB_STORE_EXTENSION_ID: ${{ secrets.CHROME_WEB_STORE_EXTENSION_ID }}
           CHROME_WEB_STORE_PUBLISHER_ID: ${{ secrets.CHROME_WEB_STORE_PUBLISHER_ID }}
           CHROME_WEB_STORE_CLIENT_ID: ${{ secrets.CHROME_WEB_STORE_CLIENT_ID }}
@@ -92,6 +93,7 @@ jobs:
           missing=()
           for name in \
             VITE_SENTRY_DSN \
+            SENTRY_AUTH_TOKEN \
             CHROME_WEB_STORE_EXTENSION_ID \
             CHROME_WEB_STORE_PUBLISHER_ID \
             CHROME_WEB_STORE_CLIENT_ID \
@@ -128,6 +130,7 @@ jobs:
       - name: Build and package extension
         env:
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           RELEASE_VERSION: ${{ needs.version.outputs.version }}
         run: |
           bun run build:all
