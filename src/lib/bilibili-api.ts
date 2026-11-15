@@ -1,6 +1,6 @@
 import { FETCH_DEFAULTS, UGC_PLAY_URL_API, BANGUMI_PLAY_URL_API, QUALITY_LABELS } from './constants';
-import { ErrorCode } from './schemas';
-import type { DashData, DashStream, DurlSegment } from './schemas';
+import { DashDataSchema, ErrorCode } from './schemas';
+import type { DashStream, DurlSegment } from './schemas';
 import { signWbi, clearWbiKeys, fetchWbiKeys } from './wbi';
 import { extractInitialState } from './bilibili-types';
 import { logInfo, logWarn, logError, logFetch } from './logger';
@@ -24,20 +24,27 @@ function normalizeStream(stream: DashStream): DashStream {
 	};
 }
 
-function buildDashResult(dash: DashData, quality: number, codecid: number): PlayUrlResult {
-	const video =
-		dash.video.find(
-			(v) => `${v.codecid ?? ''}` === `${codecid}` && `${v.id}` === `${quality}`
-		) ?? dash.video[0];
-	const audio = dash.audio[0];
+function buildDashResult(dash: unknown, quality: number, codecid: number): PlayUrlResult {
+	const parsedDash = DashDataSchema.safeParse(dash);
+	if (!parsedDash.success) {
+		logWarn(MODULE, 'buildDashResult: invalid DASH data');
+		return { code: ErrorCode.INVALID_RESPONSE, message: '该视频暂时不支持下载' };
+	}
 
-	if (!audio || !video) {
+	const { audio, video: videos } = parsedDash.data;
+	const video =
+		videos.find(
+			(v) => `${v.codecid ?? ''}` === `${codecid}` && `${v.id}` === `${quality}`
+		) ?? videos[0];
+	const audioStream = audio[0];
+
+	if (!audioStream || !video) {
 		logWarn(MODULE, 'buildDashResult: no matching audio/video', {
 			quality,
 			codecid,
-			audioCount: dash.audio.length,
-			videoCount: dash.video.length,
-			videoIds: dash.video.map((v) => v.id)
+			audioCount: audio.length,
+			videoCount: videos.length,
+			videoIds: videos.map((v) => v.id)
 		});
 		return { code: ErrorCode.INVALID_RESPONSE, message: '该视频暂时不支持下载' };
 	}
@@ -45,13 +52,13 @@ function buildDashResult(dash: DashData, quality: number, codecid: number): Play
 	logInfo(MODULE, 'buildDashResult: matched', {
 		videoId: video.id,
 		videoCodecid: video.codecid,
-		audioId: audio.id,
+		audioId: audioStream.id,
 		qualityLabel: QUALITY_LABELS[video.id] ?? ''
 	});
 
 	return {
 		code: ErrorCode.OK,
-		dash: { audio: normalizeStream(audio), video: normalizeStream(video) },
+		dash: { audio: normalizeStream(audioStream), video: normalizeStream(video) },
 		qualityDescription: QUALITY_LABELS[video.id] ?? ''
 	};
 }
@@ -92,7 +99,7 @@ interface PlayUrlJson {
 	code: number;
 	message?: string;
 	data?: {
-		dash?: DashData;
+		dash?: unknown;
 		durl?: DurlSegment[];
 		video_codecid?: number;
 		accept_quality?: number[];
@@ -182,7 +189,7 @@ interface BangumiPlayUrlJson {
 	message?: string;
 	result?: {
 		video_info: {
-			dash?: DashData;
+			dash?: unknown;
 			durl?: DurlSegment[];
 			video_codecid?: number;
 			accept_quality?: number[];
@@ -191,7 +198,7 @@ interface BangumiPlayUrlJson {
 		};
 	};
 	data?: {
-		dash?: DashData;
+		dash?: unknown;
 		durl?: DurlSegment[];
 		video_codecid?: number;
 		accept_quality?: number[];

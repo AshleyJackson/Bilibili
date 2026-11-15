@@ -6469,15 +6469,24 @@ function normalizeStream(stream) {
 	};
 }
 function buildDashResult(dash, quality, codecid) {
-	const video = dash.video.find((v) => `${v.codecid ?? ""}` === `${codecid}` && `${v.id}` === `${quality}`) ?? dash.video[0];
-	const audio = dash.audio[0];
-	if (!audio || !video) {
+	const parsedDash = DashDataSchema.safeParse(dash);
+	if (!parsedDash.success) {
+		logWarn(MODULE$1, "buildDashResult: invalid DASH data");
+		return {
+			code: ErrorCode.INVALID_RESPONSE,
+			message: "该视频暂时不支持下载"
+		};
+	}
+	const { audio, video: videos } = parsedDash.data;
+	const video = videos.find((v) => `${v.codecid ?? ""}` === `${codecid}` && `${v.id}` === `${quality}`) ?? videos[0];
+	const audioStream = audio[0];
+	if (!audioStream || !video) {
 		logWarn(MODULE$1, "buildDashResult: no matching audio/video", {
 			quality,
 			codecid,
-			audioCount: dash.audio.length,
-			videoCount: dash.video.length,
-			videoIds: dash.video.map((v) => v.id)
+			audioCount: audio.length,
+			videoCount: videos.length,
+			videoIds: videos.map((v) => v.id)
 		});
 		return {
 			code: ErrorCode.INVALID_RESPONSE,
@@ -6487,13 +6496,13 @@ function buildDashResult(dash, quality, codecid) {
 	logInfo(MODULE$1, "buildDashResult: matched", {
 		videoId: video.id,
 		videoCodecid: video.codecid,
-		audioId: audio.id,
+		audioId: audioStream.id,
 		qualityLabel: QUALITY_LABELS[video.id] ?? ""
 	});
 	return {
 		code: ErrorCode.OK,
 		dash: {
-			audio: normalizeStream(audio),
+			audio: normalizeStream(audioStream),
 			video: normalizeStream(video)
 		},
 		qualityDescription: QUALITY_LABELS[video.id] ?? ""
