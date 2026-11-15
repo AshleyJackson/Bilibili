@@ -201,10 +201,17 @@ export function forwardContentScriptErrorMessage(value: unknown): Promise<boolea
 
 const UBLOCK_PREVENT_FETCH_FRAME =
 	/chrome-extension:\/\/[^/\s]+\/rulesets\/scripting\/scriptlet\/ublock-filters\.prevent-fetch\.js/i;
+const UNSUPPORTED_BILIBILI_STREAM_URL_ERROR = 'Unsupported Bilibili stream URL';
 
 export function dispatchContentScriptError(error: unknown, module?: string): void {
 	if (typeof window === 'undefined') return;
 	if (error instanceof Error && UBLOCK_PREVENT_FETCH_FRAME.test(error.stack ?? '')) return;
+	if (
+		(error instanceof Error && error.message === UNSUPPORTED_BILIBILI_STREAM_URL_ERROR) ||
+		error === UNSUPPORTED_BILIBILI_STREAM_URL_ERROR
+	) {
+		return;
+	}
 
 	const message = createSentryErrorMessage(error, 'content-script', module);
 	window.dispatchEvent(new CustomEvent(CONTENT_SCRIPT_ERROR_EVENT, { detail: message }));
