@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Last updated:** July 12, 2026
+**Last updated:** November 15, 2026
 
 ## Overview
 
@@ -37,12 +37,14 @@ The Extension uses FFmpeg (compiled to WebAssembly) to merge audio and video str
 
 The Extension requests the following browser permissions:
 
-| Permission | Purpose |
-|-----------|---------|
-| Access to `*.bilibili.com` pages (content script) | Read video metadata and stream URLs from the page |
-| `web_accessible_resources` (JS, CSS, WASM files) | Serve FFmpeg assets to the page context for in-browser video merging |
+| Permission                                                     | Purpose                                                                                                  |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Access to `*.bilibili.com` pages (content script)              | Read video metadata and stream URLs from the page                                                        |
+| Access to `*.bilivideo.com` and Bilibili's Akamai mirror hosts | Fetch selected video streams through the extension service worker when page-origin CORS blocks downloads |
+| Access to the Sentry ingest endpoint                           | Send sanitized runtime error reports                                                                     |
+| `web_accessible_resources` (JS, CSS, WASM files)               | Serve FFmpeg assets to the page context for in-browser video merging                                     |
 
-No other permissions are requested.
+Stream downloads and merging still run locally in the browser. The extension does not use an intermediary download server.
 
 ## Changes to This Policy
 

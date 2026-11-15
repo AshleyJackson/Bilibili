@@ -1,11 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import {
-	downloadStream,
-	streamToSegment,
-	downloadDurlSegments,
-	extensionForUrl
-} from './orchestration';
+import { downloadStream, streamToSegment, downloadDurlSegments, extensionForUrl } from './orchestration';
+import { fetchStreamThroughExtension } from '../stream-download-client';
 
 // Silence the logger
 vi.mock('../logger', () => ({
@@ -24,8 +20,15 @@ vi.mock('../ffmpeg', () => ({
 	})
 }));
 
+vi.mock('../stream-download-client', () => ({
+	fetchStreamThroughExtension: vi.fn()
+}));
+
+const extensionFetchMock = vi.mocked(fetchStreamThroughExtension);
+
 beforeEach(() => {
 	vi.restoreAllMocks();
+	extensionFetchMock.mockReset();
 });
 
 describe('streamToSegment', () => {
@@ -53,8 +56,7 @@ describe('streamToSegment', () => {
 describe('downloadStream', () => {
 	it('downloads primary URL when it succeeds', async () => {
 		const body = new Uint8Array([1, 2]);
-		vi.stubGlobal(
-			'fetch',
+		extensionFetchMock.mockImplementation(
 			vi.fn(async () => {
 				const stream = new ReadableStream<Uint8Array>({
 					start(c) {
@@ -84,11 +86,9 @@ describe('downloadStream', () => {
 
 	it('falls back to backup when primary 403s', async () => {
 		const okBody = new Uint8Array([5, 5, 5]);
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async (url: string | URL | Request) => {
-				const u = typeof url === 'string' ? url : url.toString();
-				if (u === 'https://cdn/v.m4s') {
+		extensionFetchMock.mockImplementation(
+			vi.fn(async (url: string) => {
+				if (url === 'https://cdn/v.m4s') {
 					return { ok: false, status: 403, statusText: 'Forbidden', headers: new Headers() } as Response;
 				}
 				const stream = new ReadableStream<Uint8Array>({
@@ -119,8 +119,7 @@ describe('downloadDurlSegments', () => {
 		const a = new Uint8Array([1]);
 		const b = new Uint8Array([2, 3]);
 		let call = 0;
-		vi.stubGlobal(
-			'fetch',
+		extensionFetchMock.mockImplementation(
 			vi.fn(async () => {
 				const body = call++ === 0 ? a : b;
 				const stream = new ReadableStream<Uint8Array>({
@@ -138,10 +137,7 @@ describe('downloadDurlSegments', () => {
 				} as Response;
 			})
 		);
-		const blob = await downloadDurlSegments([
-			{ url: 'https://cdn/a.mp4' },
-			{ url: 'https://cdn/b.mp4' }
-		]);
+		const blob = await downloadDurlSegments([{ url: 'https://cdn/a.mp4' }, { url: 'https://cdn/b.mp4' }]);
 		const buf = new Uint8Array(await blob.arrayBuffer());
 		expect(Array.from(buf)).toEqual([1, 2, 3]);
 	});
