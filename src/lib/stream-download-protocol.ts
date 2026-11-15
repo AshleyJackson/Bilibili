@@ -145,3 +145,13 @@ export function decodeBase64(value: string): ArrayBuffer {
 	}
 	return bytes.buffer;
 }
+
+export function decodeStreamWorkerChunk(
+	message: Extract<StreamWorkerMessage, { type: 'chunk' }>
+): Extract<PageStreamMessage, { type: 'chunk' }> {
+	return {
+		type: 'chunk',
+		sequence: message.sequence,
+		buffer: decodeBase64(message.data)
+	};
+}

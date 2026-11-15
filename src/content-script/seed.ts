@@ -6,7 +6,7 @@ import {
 	reportErrorToSentry
 } from '$lib/sentry-reporting';
 import {
-	decodeBase64,
+	decodeStreamWorkerChunk,
 	isAllowedStreamUrl,
 	isPageStreamControlMessage,
 	isPageStreamFetchRequest,
@@ -71,8 +71,8 @@ function relayStreamFetch(pagePort: MessagePort, url: string): void {
 
 		if (rawMessage.type === 'chunk') {
 			try {
-				const buffer = decodeBase64(rawMessage.data);
-				sendPageMessage({ type: 'chunk', buffer }, [buffer]);
+				const message = decodeStreamWorkerChunk(rawMessage);
+				sendPageMessage(message, [message.buffer]);
 			} catch (error) {
 				terminal = true;
 				sendPageMessage({

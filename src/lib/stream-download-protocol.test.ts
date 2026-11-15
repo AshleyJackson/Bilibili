@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	decodeBase64,
+	decodeStreamWorkerChunk,
 	encodeBase64,
 	isAllowedStreamUrl,
 	isBilibiliPageUrl,
@@ -64,5 +65,17 @@ describe('stream download protocol', () => {
 	it('encodes and decodes stream bytes without changing them', () => {
 		const bytes = new Uint8Array([0, 1, 2, 127, 128, 255]);
 		expect(new Uint8Array(decodeBase64(encodeBase64(bytes)))).toEqual(bytes);
+	});
+
+	it('preserves the sequence when decoding a worker chunk for the page', () => {
+		const bytes = new Uint8Array([1, 2, 3]);
+		const pageMessage = decodeStreamWorkerChunk({
+			type: 'chunk',
+			sequence: 7,
+			data: encodeBase64(bytes)
+		});
+
+		expect(pageMessage.sequence).toBe(7);
+		expect(new Uint8Array(pageMessage.buffer)).toEqual(bytes);
 	});
 });
