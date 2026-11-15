@@ -86,10 +86,7 @@ describe('Sentry message validation and forwarding', () => {
 		const dispatchEvent = vi.fn();
 		vi.stubGlobal('window', { dispatchEvent });
 
-		dispatchContentScriptError(
-			new Error('Unsupported Bilibili stream URL: https://example.com/video.m4s'),
-			'stream'
-		);
+		dispatchContentScriptError(new Error('Unsupported Bilibili stream URL: https://example.com/video.m4s'), 'stream');
 
 		expect(dispatchEvent).toHaveBeenCalledOnce();
 		expect(dispatchEvent.mock.calls[0][0].detail.error.message).toBe(
