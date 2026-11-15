@@ -4,8 +4,15 @@ on:
   push:
     branches: [master]
     paths:
-      - "static/manifest.json"
-      - ".github/workflows/publish-chrome-extension.yml"
+      - 'static/manifest.json'
+      - '.github/workflows/publish-chrome-extension.yml'
+  workflow_dispatch:
+    inputs:
+      publish_current_version:
+        description: 'Set true after a version bump or to retry a failed publish'
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -30,6 +37,7 @@ jobs:
         id: compare
         env:
           BASE_SHA: ${{ github.event.before }}
+          FORCE_PUBLISH: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_current_version }}
         run: |
           python3 <<'PY'
           import json
@@ -44,6 +52,7 @@ jobs:
               raise SystemExit(f"{manifest_path} must contain a non-empty version string")
 
           base_sha = os.environ.get("BASE_SHA", "").strip()
+          force_publish = os.environ.get("FORCE_PUBLISH", "false").lower() == "true"
           previous_version = None
           if base_sha and set(base_sha) != {"0"}:
               try:
@@ -56,12 +65,14 @@ jobs:
               except (subprocess.CalledProcessError, json.JSONDecodeError):
                   pass
 
-          changed = previous_version is not None and previous_version != version
+          changed = force_publish or (previous_version is not None and previous_version != version)
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"changed={'true' if changed else 'false'}\n")
               output.write(f"version={version}\n")
 
-          if changed:
+          if force_publish:
+              summary = f"Manual publish requested for manifest version {version}. Publishing is enabled."
+          elif changed:
               summary = f"Manifest version changed: {previous_version} → {version}. Publishing is enabled."
           else:
               summary = f"Manifest version did not change (previous: {previous_version or 'unavailable'}, current: {version}). Publishing is skipped."
