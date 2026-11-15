@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fetchSegment, collectUrls } from './stream-fetch';
 import { fetchStreamThroughExtension } from '../stream-download-client';
+import { logError } from '../logger';
 
 // Silence the logger
 vi.mock('../logger', () => ({
@@ -17,6 +18,7 @@ vi.mock('../stream-download-client', () => ({
 }));
 
 const extensionFetchMock = vi.mocked(fetchStreamThroughExtension);
+const logErrorMock = vi.mocked(logError);
 
 function mockResponse(body: Uint8Array, init?: { status?: number; contentLength?: number }): Response {
 	const status = init?.status ?? 200;
@@ -41,6 +43,7 @@ function mockResponse(body: Uint8Array, init?: { status?: number; contentLength?
 beforeEach(() => {
 	vi.restoreAllMocks();
 	extensionFetchMock.mockReset();
+	logErrorMock.mockClear();
 });
 
 describe('collectUrls', () => {
@@ -86,6 +89,49 @@ describe('fetchSegment', () => {
 		expect(usedUrl).toBe('https://bak/backup.m4s');
 		expect(await blob.arrayBuffer()).toEqual(okBody.buffer);
 		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(logErrorMock).not.toHaveBeenCalled();
+	});
+
+	it('falls back after network retries without logging candidate failures as errors', { timeout: 15_000 }, async () => {
+		const okBody = new Uint8Array([4, 5, 6]);
+		const fetchMock = vi.fn(async (url: string) => {
+			if (url === 'https://cdn/primary.m4s') throw new TypeError('Failed to fetch');
+			return mockResponse(okBody, { contentLength: 3 });
+		});
+		extensionFetchMock.mockImplementation(fetchMock);
+
+		const { blob, usedUrl } = await fetchSegment(['https://cdn/primary.m4s', 'https://bak/backup.m4s']);
+		expect(usedUrl).toBe('https://bak/backup.m4s');
+		expect(await blob.arrayBuffer()).toEqual(okBody.buffer);
+		expect(fetchMock).toHaveBeenCalledTimes(4);
+		expect(logErrorMock).not.toHaveBeenCalled();
+	});
+
+	it('does not retry or report unsupported stream URLs to Sentry', async () => {
+		extensionFetchMock.mockRejectedValue(new Error('Unsupported Bilibili stream URL'));
+
+		await expect(
+			fetchSegment(['https://example.com/video.m4s', 'https://example.com/backup.m4s'])
+		).rejects.toThrow('Unsupported Bilibili stream URL');
+
+		expect(extensionFetchMock).toHaveBeenCalledTimes(2);
+		expect(logErrorMock).not.toHaveBeenCalled();
+	});
+
+	it('falls back to backup URL when primary responds with HTTP 567', async () => {
+		const okBody = new Uint8Array([5, 6, 7]);
+		const fetchMock = vi.fn(async (url: string) => {
+			if (url === 'https://cdn/primary.m4s') {
+				return { ok: false, status: 567, statusText: 'HTTP 567', headers: new Headers() } as Response;
+			}
+			return mockResponse(okBody, { contentLength: 3 });
+		});
+		extensionFetchMock.mockImplementation(fetchMock);
+
+		const { blob, usedUrl } = await fetchSegment(['https://cdn/primary.m4s', 'https://bak/backup.m4s']);
+		expect(usedUrl).toBe('https://bak/backup.m4s');
+		expect(await blob.arrayBuffer()).toEqual(okBody.buffer);
+		expect(fetchMock).toHaveBeenCalledTimes(4);
 	});
 
 	it('falls back to second backup when first backup also throws', { timeout: 15_000 }, async () => {
@@ -112,6 +158,18 @@ describe('fetchSegment', () => {
 		await expect(fetchSegment(['https://cdn/a.m4s', 'https://cdn/b.m4s'])).rejects.toThrow(/all segment URLs failed/);
 		// Each URL gets 3 attempts = 6 total
 		expect(fetchMock).toHaveBeenCalledTimes(6);
+		expect(logErrorMock).toHaveBeenCalledTimes(1);
+		expect(logErrorMock).toHaveBeenCalledWith(
+			'stream',
+			'all segment URLs failed',
+			expect.objectContaining({
+				candidateCount: 2,
+				failures: expect.arrayContaining([
+					expect.objectContaining({ type: 'network', error: 'network down' })
+				])
+			}),
+			expect.any(Error)
+		);
 	});
 
 	it('throws on empty URL list', async () => {
@@ -139,5 +197,6 @@ describe('fetchSegment', () => {
 			fetchSegment(['https://cdn/a.m4s', 'https://cdn/b.m4s'], undefined, controller.signal)
 		).rejects.toThrow('The operation was aborted');
 		expect(extensionFetchMock).toHaveBeenCalledTimes(1);
+		expect(logErrorMock).not.toHaveBeenCalled();
 	});
 });

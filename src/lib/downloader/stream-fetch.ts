@@ -47,6 +47,7 @@ async function fetchOne(url: string, onProgress?: ProgressFn, signal?: AbortSign
 			response = await fetchStreamThroughExtension(url, signal);
 		} catch (err) {
 			if (signal?.aborted) throw err;
+			if (err instanceof Error && err.message === 'Unsupported Bilibili stream URL') throw err;
 			// Network error (DNS / TCP / TLS failure) — retry with backoff.
 			if (attempt < maxRetries) {
 				const delay = Math.min(1000 * Math.pow(2, attempt), 10_000);
@@ -139,6 +140,12 @@ export async function fetchSegment(
 	if (urls.length === 0) throw new Error('fetchSegment: no URLs provided');
 
 	let lastErr: unknown;
+	const failures: Array<{
+		url: string;
+		type: 'http' | 'network' | 'validation';
+		status?: number;
+		error: string;
+	}> = [];
 	for (let i = 0; i < urls.length; i++) {
 		const url = urls[i];
 		const isBackup = i > 0;
@@ -147,12 +154,42 @@ export async function fetchSegment(
 			const blob = await fetchOne(url, onProgress, signal);
 			return { blob, usedUrl: url };
 		} catch (err) {
+			if (signal?.aborted || (err instanceof Error && err.name === 'AbortError')) throw err;
 			lastErr = err;
-			logError(MODULE, `fetch failed for URL ${i}`, { url: url.slice(0, 80) }, err);
-			if (signal?.aborted) throw err;
+			const error = err instanceof Error ? err.message : String(err);
+			const statusMatch = /^HTTP (\d+)/.exec(error);
+			const isUnsupportedUrl = error === 'Unsupported Bilibili stream URL';
+			const failure = {
+				url: url.slice(0, 80),
+				type: statusMatch ? ('http' as const) : isUnsupportedUrl ? ('validation' as const) : ('network' as const),
+				...(statusMatch ? { status: Number(statusMatch[1]) } : {}),
+				error
+			};
+			failures.push(failure);
+			logWarn(MODULE, `fetch failed for URL ${i}`, failure);
 		}
 	}
-	throw new Error(`all segment URLs failed; last error: ${(lastErr as Error)?.message ?? lastErr}`);
+	const lastErrorMessage = lastErr instanceof Error ? lastErr.message : String(lastErr);
+	const failureSummary = failures
+		.map((failure) =>
+			failure.type === 'http'
+				? `HTTP ${failure.status} at ${failure.url}: ${failure.error}`
+				: failure.type === 'validation'
+					? `invalid URL at ${failure.url}: ${failure.error}`
+					: `network error at ${failure.url}: ${failure.error}`
+		)
+		.join('; ');
+	if (failures.every((failure) => failure.type === 'validation')) throw lastErr;
+	const terminalError = new Error(
+		`all segment URLs failed; ${failureSummary}; last error: ${lastErrorMessage}`
+	);
+	logError(
+		MODULE,
+		'all segment URLs failed',
+		{ candidateCount: urls.length, failures },
+		terminalError
+	);
+	throw terminalError;
 }
 
 /**
