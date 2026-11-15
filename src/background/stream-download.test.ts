@@ -155,4 +155,32 @@ describe('attachStreamDownloadPort', () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 		expect(port.disconnected).toBe(true);
 	});
+
+	it('waits for the Referer rule before fetching the CDN URL', async () => {
+		const port = new FakeRuntimePort();
+		let resolveReady!: (ready: boolean) => void;
+		const refererRuleReady = new Promise<boolean>((resolve) => {
+			resolveReady = resolve;
+		});
+		const fetchMock = vi.fn(async () => new Response(null, { status: 403 }));
+
+		attachStreamDownloadPort(
+			port as unknown as chrome.runtime.Port,
+			'extension-id',
+			fetchMock as unknown as typeof fetch,
+			refererRuleReady
+		);
+		port.send({
+			type: 'fetch',
+			url: 'https://upos-sz-mirror.bilivideo.com/video.m4s?sign=test'
+		});
+
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(fetchMock).not.toHaveBeenCalled();
+
+		resolveReady(true);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(workerMessages(port)).toContainEqual({ type: 'response', status: 403, statusText: '', contentLength: null });
+	});
 });

@@ -32,10 +32,9 @@ export const SETTING_SHOW = 'bilibili_helper_show';
 export const FETCH_DEFAULTS: RequestInit = { credentials: 'include' };
 
 // For CDN stream downloads (upos-sz-*.bilivideo.com etc.). Bilibili's CDN validates
-// the Referer header; from page context the browser auto-sends the document's origin,
-// but we pin the referrer policy to guarantee it (Bilibili pages sometimes set a
-// restrictive <meta name="referrer">). `Referer` is a forbidden header for fetch(),
-// so we set `referrer` directly instead.
+// the Referer header. The extension service worker also installs a scoped
+// declarativeNetRequest rule because extension fetch() does not reliably send its
+// RequestInit.referrer value.
 export const STREAM_FETCH_DEFAULTS: RequestInit = {
 	credentials: 'include',
 	referrer: 'https://www.bilibili.com/',

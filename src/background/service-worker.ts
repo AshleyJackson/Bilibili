@@ -6,9 +6,16 @@ import {
 	SENTRY_ERROR_MESSAGE_TYPE
 } from '$lib/sentry-reporting';
 import { attachStreamDownloadPort } from './stream-download';
+import { installStreamRefererRule } from './stream-referer-rule';
 
 const dsn = import.meta.env.VITE_SENTRY_DSN;
 const allowReport = createSentryReportRateLimiter();
+const streamRefererRuleReady = installStreamRefererRule(chrome.declarativeNetRequest, chrome.runtime.id)
+	.then(() => true)
+	.catch((error: unknown) => {
+		console.error('[bilibili downloader] failed to install stream Referer rule', error);
+		return false;
+	});
 
 if (dsn) {
 	Sentry.init({
@@ -65,5 +72,5 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 chrome.runtime.onConnect.addListener((port) => {
-	attachStreamDownloadPort(port, chrome.runtime.id);
+	attachStreamDownloadPort(port, chrome.runtime.id, fetch, streamRefererRuleReady);
 });
