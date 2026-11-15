@@ -1,4 +1,4 @@
-import { GB, MB, KB, SETTING_DOWNLOAD_MODE, SETTING_MERGE_MODE, SETTING_SHOW } from './constants';
+import { GB, MB, KB, SETTING_SHOW } from './constants';
 
 // ── Helpers ──
 
@@ -7,8 +7,7 @@ export const isBilibili = (): boolean =>
 
 export const isEdge = (): boolean => window.navigator.userAgent.indexOf('Edg/') !== -1;
 
-export const isVideoPage = (): boolean =>
-	/\/video\/(av|bv)[0-9a-zA-Z]+/i.test(window.location.pathname);
+export const isVideoPage = (): boolean => /\/video\/(av|bv)[0-9a-zA-Z]+/i.test(window.location.pathname);
 
 export const isBangumiPage = (): boolean => /\/bangumi\/play\/\S+/i.test(window.location.pathname);
 
@@ -21,14 +20,6 @@ export function formatSize(bytes: number | undefined | null): string {
 }
 
 // ── Settings ──
-
-export function isAdvancedMode(): boolean {
-	return localStorage.getItem(SETTING_DOWNLOAD_MODE) !== 'normal';
-}
-
-export function isMergeMode(): boolean {
-	return localStorage.getItem(SETTING_MERGE_MODE) !== 'off';
-}
 
 export function isHidden(): boolean {
 	return localStorage.getItem(SETTING_SHOW) === 'hide';
@@ -76,20 +67,15 @@ export async function fileToUint8Array(file: File | Blob): Promise<Uint8Array> {
 
 // ── Download Blob ──
 
-export function downloadBlob(
-	data: Uint8Array,
-	filename: string,
-	container: HTMLElement,
-	onDone?: () => void
-): void {
-	const blob = new Blob([data as BlobPart], { type: 'application/octet-stream' });
+/**
+ * Trigger a browser save for `blob` and return its object URL. The caller owns
+ * the URL (it backs the "save again" link) and must revoke it when done.
+ */
+export function saveBlob(blob: Blob, filename: string): string {
 	const url = URL.createObjectURL(blob);
 	const anchor = document.createElement('a');
-	anchor.setAttribute('href', url);
-	anchor.setAttribute('download', filename);
-	anchor.setAttribute('style', 'margin-left:10px');
-	anchor.innerHTML = '（如果没有弹出下载，请点击这里保存）';
-	container.appendChild(anchor);
+	anchor.href = url;
+	anchor.download = filename;
 	anchor.click();
-	onDone?.();
+	return url;
 }

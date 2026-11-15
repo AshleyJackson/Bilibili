@@ -196,6 +196,40 @@ describe('downloadAndMerge', () => {
 			})
 		).rejects.toBe(readError);
 	});
+
+	it('signals the merge phase after both streams finish and before FFmpeg runs', async () => {
+		const order: string[] = [];
+		extensionFetchMock.mockImplementation(
+			vi.fn(async (url: string) => {
+				const body = new Uint8Array([url.includes('audio') ? 1 : 2]);
+				const stream = new ReadableStream<Uint8Array>({
+					start(c) {
+						c.enqueue(body);
+						c.close();
+					}
+				});
+				order.push(`fetch:${url.includes('audio') ? 'audio' : 'video'}`);
+				return { ok: true, status: 200, headers: new Headers({ 'content-length': '1' }), body: stream } as Response;
+			})
+		);
+		mergeAudioVideoMock.mockImplementationOnce(async () => {
+			order.push('merge');
+			return [new ArrayBuffer(4), () => {}];
+		});
+		addInternals();
+		const progress = vi.fn();
+
+		const result = await downloadAndMerge(
+			{ audio: { url: 'https://cdn/audio.m4s' }, video: { url: 'https://cdn/video.m4s' } },
+			progress,
+			() => order.push('merging')
+		);
+
+		expect(order.slice(-2)).toEqual(['merging', 'merge']);
+		expect(progress).toHaveBeenCalledWith('audio', 1, 1);
+		expect(progress).toHaveBeenCalledWith('video', 1, 1);
+		expect(result.data.byteLength).toBe(4);
+	});
 });
 
 describe('extensionForUrl', () => {

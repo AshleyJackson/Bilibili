@@ -17,8 +17,6 @@ var FFMPEG_CORE_WASM = "ffmpeg-core.wasm";
 var UGC_PLAY_URL_API = "https://api.bilibili.com/x/player/wbi/playurl";
 var BANGUMI_PLAY_URL_API = "https://api.bilibili.com/pgc/player/web/v2/playurl";
 var NAV_API = "https://api.bilibili.com/x/web-interface/nav";
-var SETTING_DOWNLOAD_MODE = "bilibili_helper_download_mode";
-var SETTING_MERGE_MODE = "bilibili_helper_merge_mode";
 var FETCH_DEFAULTS = { credentials: "include" };
 var STREAM_FETCH_DEFAULTS = {
 	credentials: "include",
@@ -3229,7 +3227,7 @@ var parse = /* @__PURE__ */ _parse(ZodRealError);
 var parseAsync = /* @__PURE__ */ _parseAsync(ZodRealError);
 var safeParse = /* @__PURE__ */ _safeParse(ZodRealError);
 var safeParseAsync = /* @__PURE__ */ _safeParseAsync(ZodRealError);
-var encode$1 = /* @__PURE__ */ _encode(ZodRealError);
+var encode = /* @__PURE__ */ _encode(ZodRealError);
 var decode = /* @__PURE__ */ _decode(ZodRealError);
 var encodeAsync = /* @__PURE__ */ _encodeAsync(ZodRealError);
 var decodeAsync = /* @__PURE__ */ _decodeAsync(ZodRealError);
@@ -3290,7 +3288,7 @@ var ZodType = /*@__PURE__*/ $constructor("ZodType", (inst, def) => {
 	inst.parseAsync = async (data, params) => parseAsync(inst, data, params, { callee: inst.parseAsync });
 	inst.safeParseAsync = async (data, params) => safeParseAsync(inst, data, params);
 	inst.spa = inst.safeParseAsync;
-	inst.encode = (data, params) => encode$1(inst, data, params);
+	inst.encode = (data, params) => encode(inst, data, params);
 	inst.decode = (data, params) => decode(inst, data, params);
 	inst.encodeAsync = async (data, params) => encodeAsync(inst, data, params);
 	inst.decodeAsync = async (data, params) => decodeAsync(inst, data, params);
@@ -4093,12 +4091,6 @@ function formatSize(bytes) {
 	if (bytes >= 1024) return `${(bytes / KB).toFixed(2)}KB`;
 	return `${bytes}B`;
 }
-function isAdvancedMode() {
-	return localStorage.getItem(SETTING_DOWNLOAD_MODE) !== "normal";
-}
-function isMergeMode() {
-	return localStorage.getItem(SETTING_MERGE_MODE) !== "off";
-}
 function getInternals() {
 	const el = document.getElementById("bilibili-helper-ext-content-script");
 	const { manifest, baseUrl } = JSON.parse(el.dataset.internals);
@@ -4127,17 +4119,17 @@ async function fileToUint8Array(file) {
 		throw new Error("Unable to read file data. Please try the download again.");
 	}
 }
-function downloadBlob(data, filename, container, onDone) {
-	const blob = new Blob([data], { type: "application/octet-stream" });
+/**
+* Trigger a browser save for `blob` and return its object URL. The caller owns
+* the URL (it backs the "save again" link) and must revoke it when done.
+*/
+function saveBlob(blob, filename) {
 	const url = URL.createObjectURL(blob);
 	const anchor = document.createElement("a");
-	anchor.setAttribute("href", url);
-	anchor.setAttribute("download", filename);
-	anchor.setAttribute("style", "margin-left:10px");
-	anchor.innerHTML = "（如果没有弹出下载，请点击这里保存）";
-	container.appendChild(anchor);
+	anchor.href = url;
+	anchor.download = filename;
 	anchor.click();
-	onDone?.();
+	return url;
 }
 var FFMessageType;
 (function(FFMessageType) {
@@ -4502,9 +4494,11 @@ function createSentryErrorMessage(error, source, module) {
 	};
 }
 var UBLOCK_PREVENT_FETCH_FRAME = /chrome-extension:\/\/[^/\s]+\/rulesets\/scripting\/scriptlet\/ublock-filters\.prevent-fetch\.js/i;
+var UNSUPPORTED_BILIBILI_STREAM_URL_ERROR = "Unsupported Bilibili stream URL";
 function dispatchContentScriptError(error, module) {
 	if (typeof window === "undefined") return;
 	if (error instanceof Error && UBLOCK_PREVENT_FETCH_FRAME.test(error.stack ?? "")) return;
+	if (error instanceof Error && error.message === UNSUPPORTED_BILIBILI_STREAM_URL_ERROR || error === UNSUPPORTED_BILIBILI_STREAM_URL_ERROR) return;
 	const message = createSentryErrorMessage(error, "content-script", module);
 	window.dispatchEvent(new CustomEvent(CONTENT_SCRIPT_ERROR_EVENT, { detail: message }));
 }
@@ -4822,62 +4816,6 @@ function setupCleanup() {
 	}, true);
 }
 //#endregion
-//#region src/lib/download.ts
-/**
-* Link builders for the download popup. Pure HTML-string generators — no
-* orchestration logic lives here. Each link carries a JSON-encoded
-* SegmentDescriptor[] (with backup URLs) in a data attribute, which host.ts
-* decodes and passes to the downloader module on click.
-*
-* Segments use { url, backups?, size? } so the downloader can fall back to
-* backup URLs when the primary .m4s CDN URL fails or its signed deadline
-* expires.
-*/
-function encode(segments) {
-	return encodeURIComponent(JSON.stringify(segments));
-}
-/**
-* Normal-mode: plain anchor links. Bilibili's CDN requires a Referer header
-* that the browser only sends on right-click → save-as, so the label tells
-* the user that.
-*/
-function createNormalDownloadLink({ filename, segments, isDash }) {
-	return segments.map((seg, i) => {
-		const label = isDash ? i === 0 ? "音频" : "视频" : `分段${i + 1}`;
-		const name = `${filename}_${label}`;
-		return `
-        <li>
-          <a title="${name}" download="${name}.mp4" href="${seg.url}">${label}（请点右键选择链接另存为，直接点击无法下载）</a>
-          <span class="size">(${formatSize(seg.size)})</span>
-        </li>`;
-	}).join("");
-}
-/** Advanced mode, no merge: inline click-to-download links per segment. */
-function createAdvancedNoMergeLinks({ filename, segments, isDash }) {
-	return segments.map((seg, i) => {
-		const label = isDash ? i === 0 ? "音频" : "视频" : `分段${i + 1}`;
-		const name = `${filename}_${label}`;
-		const encoded = encode([seg]);
-		return `
-        <li>
-          <a title="${name}" mode="advanced" merge="off" href="#nogo" durl="${encoded}">${label}</a>
-          <span class="size">(${formatSize(seg.size)})</span>
-          <span durl="${encoded}" class="progress"></span>
-        </li>`;
-	}).join("");
-}
-/** Advanced mode, merge on: single "合并下载" link carrying all dash segments. */
-function createMergeLink({ filename, segments }) {
-	const total = segments.reduce((sum, s) => sum + (s.size ?? 0), 0);
-	const encoded = encode(segments);
-	return `
-      <li>
-        <a title="${filename}" durls="${encoded}" mode="advanced" type="a+v" merge="on" href="#nogo">合并下载</a>
-        <span class="size">(共${formatSize(total)})</span>
-        <ul style="margin-top: 8px;" durls="${encoded}" class="progress"></ul>
-      </li>`;
-}
-//#endregion
 //#region src/lib/stream-download-protocol.ts
 var STREAM_FETCH_SOURCE = "bilibili-helper-stream-fetch";
 var STREAM_FETCH_REQUEST_TYPE = "bilibili-helper:stream-fetch";
@@ -5094,6 +5032,7 @@ async function fetchOne(url, onProgress, signal, maxRetries = 2) {
 			response = await fetchStreamThroughExtension(url, signal);
 		} catch (err) {
 			if (signal?.aborted) throw err;
+			if (err instanceof Error && err.message === "Unsupported Bilibili stream URL") throw err;
 			if (attempt < maxRetries) {
 				const delay = Math.min(1e3 * Math.pow(2, attempt), 1e4);
 				logWarn(MODULE$5, `network error, retry ${attempt + 1}/${maxRetries} in ${delay}ms`, {
@@ -5180,6 +5119,7 @@ async function fetchOne(url, onProgress, signal, maxRetries = 2) {
 async function fetchSegment(urls, onProgress, signal) {
 	if (urls.length === 0) throw new Error("fetchSegment: no URLs provided");
 	let lastErr;
+	const failures = [];
 	for (let i = 0; i < urls.length; i++) {
 		const url = urls[i];
 		if (i > 0) logWarn(MODULE$5, `trying backup URL ${i}`, { url: url.slice(0, 80) });
@@ -5189,12 +5129,37 @@ async function fetchSegment(urls, onProgress, signal) {
 				usedUrl: url
 			};
 		} catch (err) {
+			if (signal?.aborted || err instanceof Error && err.name === "AbortError") throw err;
 			lastErr = err;
-			logError(MODULE$5, `fetch failed for URL ${i}`, { url: url.slice(0, 80) }, err);
-			if (signal?.aborted) throw err;
+			const error = err instanceof Error ? err.message : String(err);
+			const statusMatch = /^HTTP (\d+)/.exec(error);
+			const isUnsupportedUrl = error === "Unsupported Bilibili stream URL";
+			const failure = {
+				url: url.slice(0, 80),
+				type: statusMatch ? "http" : isUnsupportedUrl ? "validation" : "network",
+				...statusMatch ? { status: Number(statusMatch[1]) } : {},
+				error
+			};
+			failures.push(failure);
+			logWarn(MODULE$5, `fetch failed for URL ${i}`, failure);
 		}
 	}
-	throw new Error(`all segment URLs failed; last error: ${lastErr?.message ?? lastErr}`);
+	const lastErrorMessage = lastErr instanceof Error ? lastErr.message : String(lastErr);
+	const failureSummary = failures.map((failure) => failure.type === "http" ? `HTTP ${failure.status} at ${failure.url}: ${failure.error}` : failure.type === "validation" ? `invalid URL at ${failure.url}: ${failure.error}` : `network error at ${failure.url}: ${failure.error}`).join("; ");
+	if (failures.every((failure) => failure.type === "validation")) throw lastErr;
+	const terminalError = /* @__PURE__ */ new Error(`all segment URLs failed; ${failureSummary}; last error: ${lastErrorMessage}`);
+	logError(MODULE$5, "all segment URLs failed", {
+		candidateCount: urls.length,
+		failures
+	}, terminalError);
+	throw terminalError;
+}
+/**
+* Collect all candidate URLs for a stream into a flat array: primary first,
+* then backups. Tolerates missing/empty fields.
+*/
+function collectUrls(stream) {
+	return [stream.base_url ?? stream.baseUrl ?? "", ...stream.backup_url ?? stream.backupUrl ?? []].filter((u) => !!u && typeof u === "string");
 }
 //#endregion
 //#region src/lib/downloader/orchestration.ts
@@ -5207,10 +5172,18 @@ async function fetchSegment(urls, onProgress, signal) {
 *   - downloadDurlSegments: fetch a sequence of DURL segments and concatenate.
 *
 * Progress is reported via callbacks so the UI layer can render it however it
-* likes. This module never touches the DOM directly except through the
-* `downloadBlob` helper it's given.
+* likes. This module never touches the DOM.
 */
 var MODULE$4 = "dl-orch";
+/** Normalize a stream (audio/video) into a SegmentDescriptor. */
+function streamToSegment(stream) {
+	const urls = collectUrls(stream);
+	return {
+		url: urls[0] ?? "",
+		backups: urls.slice(1),
+		size: stream.size
+	};
+}
 /**
 * Download a single segment to a Blob, with primary→backup fallback and progress.
 */
@@ -5229,7 +5202,7 @@ async function downloadStream(segment, onProgress) {
 * Download audio + video in parallel, then merge into a single .mp4.
 * Returns the merged ArrayBuffer and a cleanup function for FFmpeg temp files.
 */
-async function downloadAndMerge(segments, onProgress) {
+async function downloadAndMerge(segments, onProgress, onMerging) {
 	logInfo(MODULE$4, "downloadAndMerge start", {
 		audioUrl: segments.audio.url.slice(0, 80),
 		videoUrl: segments.video.url.slice(0, 80)
@@ -5243,6 +5216,7 @@ async function downloadAndMerge(segments, onProgress) {
 		audioSize: audioBlob.size,
 		videoSize: videoBlob.size
 	});
+	onMerging?.();
 	const { baseUrl } = getInternals();
 	const [data, cleanup] = await mergeAudioVideo(baseUrl, audioBlob, videoBlob);
 	logInfo(MODULE$4, "downloadAndMerge: merge complete", { mergedSize: data.byteLength });
@@ -5257,22 +5231,2131 @@ function extensionForUrl(url) {
 	return ext === ".m4s" ? ".mp4" : ext;
 }
 //#endregion
-//#region src/lib/host.ts
+//#region src/lib/popup/tasks.ts
 /**
-* Host UI for the Bilibili download helper.
+* Per-option download state for the popup. Lives outside the DOM so progress
+* survives closing and reopening the popup, and so the toolbar button can show
+* overall progress while the popup is closed.
+*/
+/**
+* A saved file's object URL must outlive the anchor click that starts the
+* browser download, so URLs for files nobody can re-save are released late.
+*/
+var RELEASE_AFTER_SAVE_MS = 6e4;
+function errorMessage(err) {
+	return err instanceof Error ? err.message : String(err);
+}
+var DownloadTasks = class {
+	deps;
+	states = /* @__PURE__ */ new Map();
+	listeners = /* @__PURE__ */ new Set();
+	/** The live attempt per option; callbacks from any other attempt are stale. */
+	attempts = /* @__PURE__ */ new Map();
+	/** Option ids currently offered, or null before the first retain(). */
+	retained = null;
+	pendingReleases = /* @__PURE__ */ new Map();
+	constructor(deps) {
+		this.deps = deps;
+	}
+	get(id) {
+		return this.states.get(id);
+	}
+	isActive(id) {
+		const status = this.states.get(id)?.status;
+		return status === "downloading" || status === "merging";
+	}
+	subscribe(listener) {
+		this.listeners.add(listener);
+		return () => this.listeners.delete(listener);
+	}
+	summary() {
+		let active = 0;
+		let received = 0;
+		let total = 0;
+		for (const state of this.states.values()) if (state.status === "downloading") {
+			active++;
+			if (state.total > 0) {
+				received += Math.min(state.received, state.total);
+				total += state.total;
+			}
+		} else if (state.status === "merging") active++;
+		return {
+			active,
+			percent: total > 0 ? Math.floor(received / total * 100) : null
+		};
+	}
+	/** Start (or restart) a download. A second start while one is running is ignored. */
+	async start(option) {
+		if (this.isActive(option.id)) return;
+		this.forget(option.id);
+		const attempt = Symbol(option.id);
+		this.attempts.set(option.id, attempt);
+		const live = () => this.attempts.get(option.id) === attempt;
+		const startedAt = this.deps.now();
+		const progress = (received, total) => {
+			if (live()) this.set(option.id, {
+				status: "downloading",
+				received,
+				total,
+				startedAt
+			});
+		};
+		const merging = () => {
+			if (!live()) return;
+			this.set(option.id, { status: "merging" });
+			this.deps.log(`正在合并音视频 ${option.filename}`);
+		};
+		progress(0, option.size ?? 0);
+		this.deps.log(`开始下载 ${option.filename}`);
+		let finalState;
+		try {
+			const blob = option.kind === "merged" ? await this.runMerged(option, progress, merging) : await this.runSingle(option, progress);
+			finalState = {
+				status: "done",
+				url: this.deps.saveBlob(blob, option.filename),
+				size: blob.size
+			};
+			this.deps.log(`已保存 ${option.filename}（${formatSize(blob.size)}）`);
+		} catch (err) {
+			const message = errorMessage(err);
+			finalState = {
+				status: "error",
+				message
+			};
+			this.deps.log(`下载失败 ${option.filename}：${message}`);
+		}
+		this.attempts.delete(option.id);
+		if (this.retained && !this.retained.has(option.id)) {
+			if (finalState.status === "done") this.releaseLater(finalState.url);
+			this.states.delete(option.id);
+			this.emit(option.id);
+			return;
+		}
+		this.set(option.id, finalState);
+	}
+	/** Drop finished/failed state (revoking its object URL). Running downloads are kept. */
+	forget(id) {
+		const state = this.states.get(id);
+		if (!state || this.isActive(id)) return;
+		if (state.status === "done") this.deps.revokeUrl(state.url);
+		this.states.delete(id);
+		this.emit(id);
+	}
+	/** Forget everything not in `ids`, e.g. after a quality or episode change. */
+	retain(ids) {
+		this.retained = new Set(ids);
+		for (const id of [...this.states.keys()]) if (!ids.has(id)) this.forget(id);
+	}
+	dispose() {
+		for (const state of this.states.values()) if (state.status === "done") this.deps.revokeUrl(state.url);
+		for (const [url, timer] of this.pendingReleases) {
+			clearTimeout(timer);
+			this.deps.revokeUrl(url);
+		}
+		this.pendingReleases.clear();
+		this.states.clear();
+		this.attempts.clear();
+		this.listeners.clear();
+	}
+	releaseLater(url) {
+		const timer = setTimeout(() => {
+			this.pendingReleases.delete(url);
+			this.deps.revokeUrl(url);
+		}, RELEASE_AFTER_SAVE_MS);
+		this.pendingReleases.set(url, timer);
+	}
+	async runSingle(option, progress) {
+		const fallbackTotal = option.size ?? 0;
+		return this.deps.downloadStream(option.segments[0], (received, total) => progress(received, total > 0 ? total : fallbackTotal));
+	}
+	async runMerged(option, progress, merging) {
+		const [audio, video] = option.segments;
+		const parts = {
+			audio: {
+				received: 0,
+				total: audio.size ?? 0
+			},
+			video: {
+				received: 0,
+				total: video.size ?? 0
+			}
+		};
+		const { data, cleanup } = await this.deps.downloadAndMerge({
+			audio,
+			video
+		}, (which, received, total) => {
+			parts[which] = {
+				received,
+				total: total > 0 ? total : parts[which].total
+			};
+			const known = parts.audio.total > 0 && parts.video.total > 0;
+			progress(parts.audio.received + parts.video.received, known ? parts.audio.total + parts.video.total : 0);
+		}, merging);
+		try {
+			return new Blob([data], { type: "video/mp4" });
+		} finally {
+			cleanup();
+		}
+	}
+	set(id, state) {
+		this.states.set(id, state);
+		this.emit(id);
+	}
+	emit(id) {
+		for (const listener of this.listeners) listener(id);
+	}
+};
+//#endregion
+//#region node_modules/@floating-ui/utils/dist/floating-ui.utils.mjs
+var min = Math.min;
+var max = Math.max;
+var round = Math.round;
+var floor = Math.floor;
+var createCoords = (v) => ({
+	x: v,
+	y: v
+});
+var oppositeSideMap = {
+	left: "right",
+	right: "left",
+	bottom: "top",
+	top: "bottom"
+};
+function clamp(start, value, end) {
+	return max(start, min(value, end));
+}
+function evaluate(value, param) {
+	return typeof value === "function" ? value(param) : value;
+}
+function getSide(placement) {
+	return placement.split("-")[0];
+}
+function getAlignment(placement) {
+	return placement.split("-")[1];
+}
+function getOppositeAxis(axis) {
+	return axis === "x" ? "y" : "x";
+}
+function getAxisLength(axis) {
+	return axis === "y" ? "height" : "width";
+}
+function getSideAxis(placement) {
+	const firstChar = placement[0];
+	return firstChar === "t" || firstChar === "b" ? "y" : "x";
+}
+function getAlignmentAxis(placement) {
+	return getOppositeAxis(getSideAxis(placement));
+}
+function getAlignmentSides(placement, rects, rtl) {
+	if (rtl === void 0) rtl = false;
+	const alignment = getAlignment(placement);
+	const alignmentAxis = getAlignmentAxis(placement);
+	const length = getAxisLength(alignmentAxis);
+	let mainAlignmentSide = alignmentAxis === "x" ? alignment === (rtl ? "end" : "start") ? "right" : "left" : alignment === "start" ? "bottom" : "top";
+	if (rects.reference[length] > rects.floating[length]) mainAlignmentSide = getOppositePlacement(mainAlignmentSide);
+	return [mainAlignmentSide, getOppositePlacement(mainAlignmentSide)];
+}
+function getExpandedPlacements(placement) {
+	const oppositePlacement = getOppositePlacement(placement);
+	return [
+		getOppositeAlignmentPlacement(placement),
+		oppositePlacement,
+		getOppositeAlignmentPlacement(oppositePlacement)
+	];
+}
+function getOppositeAlignmentPlacement(placement) {
+	return placement.includes("start") ? placement.replace("start", "end") : placement.replace("end", "start");
+}
+var lrPlacement = ["left", "right"];
+var rlPlacement = ["right", "left"];
+var tbPlacement = ["top", "bottom"];
+var btPlacement = ["bottom", "top"];
+function getSideList(side, isStart, rtl) {
+	switch (side) {
+		case "top":
+		case "bottom":
+			if (rtl) return isStart ? rlPlacement : lrPlacement;
+			return isStart ? lrPlacement : rlPlacement;
+		case "left":
+		case "right": return isStart ? tbPlacement : btPlacement;
+		default: return [];
+	}
+}
+function getOppositeAxisPlacements(placement, flipAlignment, direction, rtl) {
+	const alignment = getAlignment(placement);
+	let list = getSideList(getSide(placement), direction === "start", rtl);
+	if (alignment) {
+		list = list.map((side) => side + "-" + alignment);
+		if (flipAlignment) list = list.concat(list.map(getOppositeAlignmentPlacement));
+	}
+	return list;
+}
+function getOppositePlacement(placement) {
+	const side = getSide(placement);
+	return oppositeSideMap[side] + placement.slice(side.length);
+}
+function expandPaddingObject(padding) {
+	var _padding$top, _padding$right, _padding$bottom, _padding$left;
+	return {
+		top: (_padding$top = padding.top) != null ? _padding$top : 0,
+		right: (_padding$right = padding.right) != null ? _padding$right : 0,
+		bottom: (_padding$bottom = padding.bottom) != null ? _padding$bottom : 0,
+		left: (_padding$left = padding.left) != null ? _padding$left : 0
+	};
+}
+function getPaddingObject(padding) {
+	return typeof padding !== "number" ? expandPaddingObject(padding) : {
+		top: padding,
+		right: padding,
+		bottom: padding,
+		left: padding
+	};
+}
+function rectToClientRect(rect) {
+	const { x, y, width, height } = rect;
+	return {
+		width,
+		height,
+		top: y,
+		left: x,
+		right: x + width,
+		bottom: y + height,
+		x,
+		y
+	};
+}
+//#endregion
+//#region node_modules/@floating-ui/core/dist/floating-ui.core.mjs
+function computeCoordsFromPlacement(_ref, placement, rtl) {
+	let { reference, floating } = _ref;
+	const sideAxis = getSideAxis(placement);
+	const alignmentAxis = getAlignmentAxis(placement);
+	const alignLength = getAxisLength(alignmentAxis);
+	const side = getSide(placement);
+	const isVertical = sideAxis === "y";
+	const commonX = reference.x + reference.width / 2 - floating.width / 2;
+	const commonY = reference.y + reference.height / 2 - floating.height / 2;
+	const commonAlign = reference[alignLength] / 2 - floating[alignLength] / 2;
+	let coords;
+	switch (side) {
+		case "top":
+			coords = {
+				x: commonX,
+				y: reference.y - floating.height
+			};
+			break;
+		case "bottom":
+			coords = {
+				x: commonX,
+				y: reference.y + reference.height
+			};
+			break;
+		case "right":
+			coords = {
+				x: reference.x + reference.width,
+				y: commonY
+			};
+			break;
+		case "left":
+			coords = {
+				x: reference.x - floating.width,
+				y: commonY
+			};
+			break;
+		default: coords = {
+			x: reference.x,
+			y: reference.y
+		};
+	}
+	const alignment = getAlignment(placement);
+	if (alignment) coords[alignmentAxis] += commonAlign * (alignment === "end" ? 1 : -1) * (rtl && isVertical ? -1 : 1);
+	return coords;
+}
+/**
+* Resolves with an object of overflow side offsets that determine how much the
+* element is overflowing a given clipping boundary on each side.
+* - positive = overflowing the boundary by that number of pixels
+* - negative = how many pixels left before it will overflow
+* - 0 = lies flush with the boundary
+* @see https://floating-ui.com/docs/detectOverflow
+*/
+async function detectOverflow(state, options) {
+	var _await$platform$isEle;
+	if (options === void 0) options = {};
+	const { x, y, platform, rects, elements, strategy } = state;
+	const { boundary = "clippingAncestors", rootBoundary = "viewport", elementContext = "floating", altBoundary = false, padding = 0 } = evaluate(options, state);
+	const paddingObject = getPaddingObject(padding);
+	const element = elements[altBoundary ? elementContext === "floating" ? "reference" : "floating" : elementContext];
+	const clippingClientRect = rectToClientRect(await platform.getClippingRect({
+		element: ((_await$platform$isEle = await (platform.isElement == null ? void 0 : platform.isElement(element))) != null ? _await$platform$isEle : true) ? element : element.contextElement || await (platform.getDocumentElement == null ? void 0 : platform.getDocumentElement(elements.floating)),
+		boundary,
+		rootBoundary,
+		strategy
+	}));
+	const rect = elementContext === "floating" ? {
+		x,
+		y,
+		width: rects.floating.width,
+		height: rects.floating.height
+	} : rects.reference;
+	const offsetParent = await (platform.getOffsetParent == null ? void 0 : platform.getOffsetParent(elements.floating));
+	const offsetScale = await (platform.isElement == null ? void 0 : platform.isElement(offsetParent)) && await (platform.getScale == null ? void 0 : platform.getScale(offsetParent)) || {
+		x: 1,
+		y: 1
+	};
+	const elementClientRect = rectToClientRect(platform.convertOffsetParentRelativeRectToViewportRelativeRect ? await platform.convertOffsetParentRelativeRectToViewportRelativeRect({
+		elements,
+		rect,
+		offsetParent,
+		strategy
+	}) : rect);
+	return {
+		top: (clippingClientRect.top - elementClientRect.top + paddingObject.top) / offsetScale.y,
+		bottom: (elementClientRect.bottom - clippingClientRect.bottom + paddingObject.bottom) / offsetScale.y,
+		left: (clippingClientRect.left - elementClientRect.left + paddingObject.left) / offsetScale.x,
+		right: (elementClientRect.right - clippingClientRect.right + paddingObject.right) / offsetScale.x
+	};
+}
+var MAX_RESET_COUNT = 50;
+/**
+* Computes the `x` and `y` coordinates that will place the floating element
+* next to a given reference element.
 *
-* Injects a download button into the Bilibili page toolbar (next to the share button)
-* instead of the old floating bottom bar. A small popup panel shows download links
-* on click.
+* This export does not have any `platform` interface logic. You will need to
+* write one for the platform you are using Floating UI with.
 */
-var MODULE$3 = "host";
-var cachedInfo = null;
-var popupEl = null;
-var btnEl = null;
-var DOWNLOAD_BTN_ID = "bilibili-helper-download-btn";
+var computePosition$1 = async (reference, floating, config) => {
+	const { placement = "bottom", strategy = "absolute", middleware = [], platform } = config;
+	const platformWithDetectOverflow = platform.detectOverflow ? platform : {
+		...platform,
+		detectOverflow
+	};
+	const rtl = await (platform.isRTL == null ? void 0 : platform.isRTL(floating));
+	let rects = await platform.getElementRects({
+		reference,
+		floating,
+		strategy
+	});
+	let { x, y } = computeCoordsFromPlacement(rects, placement, rtl);
+	let statefulPlacement = placement;
+	let resetCount = 0;
+	const middlewareData = {};
+	for (let i = 0; i < middleware.length; i++) {
+		const currentMiddleware = middleware[i];
+		if (!currentMiddleware) continue;
+		const { name, fn } = currentMiddleware;
+		const { x: nextX, y: nextY, data, reset } = await fn({
+			x,
+			y,
+			initialPlacement: placement,
+			placement: statefulPlacement,
+			strategy,
+			middlewareData,
+			rects,
+			platform: platformWithDetectOverflow,
+			elements: {
+				reference,
+				floating
+			}
+		});
+		x = nextX != null ? nextX : x;
+		y = nextY != null ? nextY : y;
+		middlewareData[name] = {
+			...middlewareData[name],
+			...data
+		};
+		if (reset && resetCount < MAX_RESET_COUNT) {
+			resetCount++;
+			if (typeof reset === "object") {
+				if (reset.placement) statefulPlacement = reset.placement;
+				if (reset.rects) rects = reset.rects === true ? await platform.getElementRects({
+					reference,
+					floating,
+					strategy
+				}) : reset.rects;
+				({x, y} = computeCoordsFromPlacement(rects, statefulPlacement, rtl));
+			}
+			i = -1;
+		}
+	}
+	return {
+		x,
+		y,
+		placement: statefulPlacement,
+		strategy,
+		middlewareData
+	};
+};
 /**
-* Remove the old floating bottom bar if it still exists from a previous version.
+* Optimizes the visibility of the floating element by flipping the `placement`
+* in order to keep it in view when the preferred placement(s) will overflow the
+* clipping boundary. Alternative to `autoPlacement`.
+* @see https://floating-ui.com/docs/flip
 */
+var flip$1 = function(options) {
+	if (options === void 0) options = {};
+	return {
+		name: "flip",
+		options,
+		async fn(state) {
+			var _middlewareData$arrow, _middlewareData$flip;
+			const { placement, middlewareData, rects, initialPlacement, platform, elements } = state;
+			const { mainAxis: checkMainAxis = true, crossAxis: checkCrossAxis = true, fallbackPlacements: specifiedFallbackPlacements, fallbackStrategy = "bestFit", fallbackAxisSideDirection = "none", flipAlignment = true, ...detectOverflowOptions } = evaluate(options, state);
+			if ((_middlewareData$arrow = middlewareData.arrow) != null && _middlewareData$arrow.alignmentOffset) return {};
+			const side = getSide(placement);
+			const initialSideAxis = getSideAxis(initialPlacement);
+			const isBasePlacement = getSide(initialPlacement) === initialPlacement;
+			const rtl = await (platform.isRTL == null ? void 0 : platform.isRTL(elements.floating));
+			const fallbackPlacements = specifiedFallbackPlacements || (isBasePlacement || !flipAlignment ? [getOppositePlacement(initialPlacement)] : getExpandedPlacements(initialPlacement));
+			const hasFallbackAxisSideDirection = fallbackAxisSideDirection !== "none";
+			if (!specifiedFallbackPlacements && hasFallbackAxisSideDirection) fallbackPlacements.push(...getOppositeAxisPlacements(initialPlacement, flipAlignment, fallbackAxisSideDirection, rtl));
+			const placements = [initialPlacement, ...fallbackPlacements];
+			const overflow = await platform.detectOverflow(state, detectOverflowOptions);
+			const overflows = [];
+			let overflowsData = ((_middlewareData$flip = middlewareData.flip) == null ? void 0 : _middlewareData$flip.overflows) || [];
+			if (checkMainAxis) overflows.push(overflow[side]);
+			if (checkCrossAxis) {
+				const sides = getAlignmentSides(placement, rects, rtl);
+				overflows.push(overflow[sides[0]], overflow[sides[1]]);
+			}
+			overflowsData = [...overflowsData, {
+				placement,
+				overflows
+			}];
+			if (!overflows.every((side) => side <= 0)) {
+				var _middlewareData$flip2, _overflowsData$filter;
+				const nextIndex = (((_middlewareData$flip2 = middlewareData.flip) == null ? void 0 : _middlewareData$flip2.index) || 0) + 1;
+				const nextPlacement = placements[nextIndex];
+				if (nextPlacement) {
+					if (!(checkCrossAxis === "alignment" ? initialSideAxis !== getSideAxis(nextPlacement) : false) || overflowsData.every((d) => getSideAxis(d.placement) === initialSideAxis ? d.overflows[0] > 0 : true)) return {
+						data: {
+							index: nextIndex,
+							overflows: overflowsData
+						},
+						reset: { placement: nextPlacement }
+					};
+				}
+				let resetPlacement = (_overflowsData$filter = overflowsData.filter((d) => d.overflows[0] <= 0).sort((a, b) => a.overflows[1] - b.overflows[1])[0]) == null ? void 0 : _overflowsData$filter.placement;
+				if (!resetPlacement) switch (fallbackStrategy) {
+					case "bestFit": {
+						var _overflowsData$filter2;
+						const placement = (_overflowsData$filter2 = overflowsData.filter((d) => {
+							if (hasFallbackAxisSideDirection) {
+								const currentSideAxis = getSideAxis(d.placement);
+								return currentSideAxis === initialSideAxis || currentSideAxis === "y";
+							}
+							return true;
+						}).map((d) => [d.placement, d.overflows.filter((overflow) => overflow > 0).reduce((acc, overflow) => acc + overflow, 0)]).sort((a, b) => a[1] - b[1])[0]) == null ? void 0 : _overflowsData$filter2[0];
+						if (placement) resetPlacement = placement;
+						break;
+					}
+					case "initialPlacement":
+						resetPlacement = initialPlacement;
+						break;
+				}
+				if (placement !== resetPlacement) return { reset: { placement: resetPlacement } };
+			}
+			return {};
+		}
+	};
+};
+var originSides = /*#__PURE__*/ new Set(["left", "top"]);
+async function convertValueToCoords(state, options) {
+	const { placement, platform, elements } = state;
+	const rtl = await (platform.isRTL == null ? void 0 : platform.isRTL(elements.floating));
+	const side = getSide(placement);
+	const alignment = getAlignment(placement);
+	const isVertical = getSideAxis(placement) === "y";
+	const mainAxisMulti = originSides.has(side) ? -1 : 1;
+	const crossAxisMulti = rtl && isVertical ? -1 : 1;
+	const rawValue = evaluate(options, state);
+	let { mainAxis, crossAxis, alignmentAxis } = typeof rawValue === "number" ? {
+		mainAxis: rawValue,
+		crossAxis: 0,
+		alignmentAxis: null
+	} : {
+		mainAxis: rawValue.mainAxis || 0,
+		crossAxis: rawValue.crossAxis || 0,
+		alignmentAxis: rawValue.alignmentAxis
+	};
+	if (alignment && typeof alignmentAxis === "number") crossAxis = alignment === "end" ? alignmentAxis * -1 : alignmentAxis;
+	return isVertical ? {
+		x: crossAxis * crossAxisMulti,
+		y: mainAxis * mainAxisMulti
+	} : {
+		x: mainAxis * mainAxisMulti,
+		y: crossAxis * crossAxisMulti
+	};
+}
+/**
+* Modifies the placement by translating the floating element along the
+* specified axes.
+* A number (shorthand for `mainAxis` or distance), or an axes configuration
+* object may be passed.
+* @see https://floating-ui.com/docs/offset
+*/
+var offset$1 = function(options) {
+	if (options === void 0) options = 0;
+	return {
+		name: "offset",
+		options,
+		async fn(state) {
+			var _middlewareData$offse, _middlewareData$arrow;
+			const { x, y, placement, middlewareData } = state;
+			const diffCoords = await convertValueToCoords(state, options);
+			if (placement === ((_middlewareData$offse = middlewareData.offset) == null ? void 0 : _middlewareData$offse.placement) && (_middlewareData$arrow = middlewareData.arrow) != null && _middlewareData$arrow.alignmentOffset) return {};
+			return {
+				x: x + diffCoords.x,
+				y: y + diffCoords.y,
+				data: {
+					...diffCoords,
+					placement
+				}
+			};
+		}
+	};
+};
+/**
+* Optimizes the visibility of the floating element by shifting it in order to
+* keep it in view when it will overflow the clipping boundary.
+* @see https://floating-ui.com/docs/shift
+*/
+var shift$1 = function(options) {
+	if (options === void 0) options = {};
+	return {
+		name: "shift",
+		options,
+		async fn(state) {
+			const { x, y, placement, platform } = state;
+			const { mainAxis: checkMainAxis = true, crossAxis: checkCrossAxis = false, limiter = { fn: (_ref) => {
+				let { x, y } = _ref;
+				return {
+					x,
+					y
+				};
+			} }, ...detectOverflowOptions } = evaluate(options, state);
+			const coords = {
+				x,
+				y
+			};
+			const overflow = await platform.detectOverflow(state, detectOverflowOptions);
+			const crossAxis = getSideAxis(placement);
+			const mainAxis = getOppositeAxis(crossAxis);
+			let mainAxisCoord = coords[mainAxis];
+			let crossAxisCoord = coords[crossAxis];
+			const clampCoord = (axis, coord) => clamp(coord + overflow[axis === "y" ? "top" : "left"], coord, coord - overflow[axis === "y" ? "bottom" : "right"]);
+			if (checkMainAxis) mainAxisCoord = clampCoord(mainAxis, mainAxisCoord);
+			if (checkCrossAxis) crossAxisCoord = clampCoord(crossAxis, crossAxisCoord);
+			const limitedCoords = limiter.fn({
+				...state,
+				[mainAxis]: mainAxisCoord,
+				[crossAxis]: crossAxisCoord
+			});
+			return {
+				...limitedCoords,
+				data: {
+					x: limitedCoords.x - x,
+					y: limitedCoords.y - y,
+					enabled: {
+						[mainAxis]: checkMainAxis,
+						[crossAxis]: checkCrossAxis
+					}
+				}
+			};
+		}
+	};
+};
+/**
+* Provides data that allows you to change the size of the floating element —
+* for instance, prevent it from overflowing the clipping boundary or match the
+* width of the reference element.
+* @see https://floating-ui.com/docs/size
+*/
+var size$1 = function(options) {
+	if (options === void 0) options = {};
+	return {
+		name: "size",
+		options,
+		async fn(state) {
+			const { placement, rects, platform, elements } = state;
+			const { apply = () => {}, ...detectOverflowOptions } = evaluate(options, state);
+			const overflow = await platform.detectOverflow(state, detectOverflowOptions);
+			const side = getSide(placement);
+			const alignment = getAlignment(placement);
+			const isYAxis = getSideAxis(placement) === "y";
+			const { width, height } = rects.floating;
+			let heightSide;
+			let widthSide;
+			if (side === "top" || side === "bottom") {
+				heightSide = side;
+				widthSide = alignment === (await (platform.isRTL == null ? void 0 : platform.isRTL(elements.floating)) ? "start" : "end") ? "left" : "right";
+			} else {
+				widthSide = side;
+				heightSide = alignment === "end" ? "top" : "bottom";
+			}
+			const maximumClippingHeight = height - overflow.top - overflow.bottom;
+			const maximumClippingWidth = width - overflow.left - overflow.right;
+			const overflowAvailableHeight = min(height - overflow[heightSide], maximumClippingHeight);
+			const overflowAvailableWidth = min(width - overflow[widthSide], maximumClippingWidth);
+			const shiftData = state.middlewareData.shift;
+			const noShift = !shiftData;
+			let availableHeight = overflowAvailableHeight;
+			let availableWidth = overflowAvailableWidth;
+			if (shiftData != null && shiftData.enabled.x) availableWidth = maximumClippingWidth;
+			if (shiftData != null && shiftData.enabled.y) availableHeight = maximumClippingHeight;
+			if (noShift && !alignment) if (isYAxis) availableWidth = width - 2 * max(overflow.left, overflow.right);
+			else availableHeight = height - 2 * max(overflow.top, overflow.bottom);
+			await apply({
+				...state,
+				availableWidth,
+				availableHeight
+			});
+			const nextDimensions = await platform.getDimensions(elements.floating);
+			if (width !== nextDimensions.width || height !== nextDimensions.height) return { reset: { rects: true } };
+			return {};
+		}
+	};
+};
+//#endregion
+//#region node_modules/@floating-ui/utils/dist/floating-ui.utils.dom.mjs
+function hasWindow() {
+	return typeof window !== "undefined";
+}
+function getNodeName(node) {
+	if (isNode(node)) return (node.nodeName || "").toLowerCase();
+	return "#document";
+}
+function getWindow(node) {
+	var _node$ownerDocument;
+	return (node == null || (_node$ownerDocument = node.ownerDocument) == null ? void 0 : _node$ownerDocument.defaultView) || window;
+}
+function getDocumentElement(node) {
+	var _ref;
+	return (_ref = (isNode(node) ? node.ownerDocument : node.document) || window.document) == null ? void 0 : _ref.documentElement;
+}
+function isNode(value) {
+	if (!hasWindow()) return false;
+	return value instanceof Node || value instanceof getWindow(value).Node;
+}
+function isElement(value) {
+	if (!hasWindow()) return false;
+	return value instanceof Element || value instanceof getWindow(value).Element;
+}
+function isHTMLElement(value) {
+	if (!hasWindow()) return false;
+	return value instanceof HTMLElement || value instanceof getWindow(value).HTMLElement;
+}
+function isShadowRoot(value) {
+	if (!hasWindow() || typeof ShadowRoot === "undefined") return false;
+	return value instanceof ShadowRoot || value instanceof getWindow(value).ShadowRoot;
+}
+function isOverflowElement(element) {
+	const { overflow, overflowX, overflowY, display } = getComputedStyle$1(element);
+	return /auto|scroll|overlay|hidden|clip/.test(overflow + overflowY + overflowX) && display !== "inline" && display !== "contents";
+}
+function isTableElement(element) {
+	return /^(table|td|th)$/.test(getNodeName(element));
+}
+function isTopLayer(element) {
+	try {
+		if (element.matches(":popover-open")) return true;
+	} catch (_e) {}
+	try {
+		return element.matches(":modal");
+	} catch (_e) {
+		return false;
+	}
+}
+var willChangeRe = /transform|translate|scale|rotate|perspective|filter/;
+var containRe = /paint|layout|strict|content/;
+var isNotNone = (value) => !!value && value !== "none";
+var isWebKitValue;
+function isContainingBlock(elementOrCss) {
+	const css = isElement(elementOrCss) ? getComputedStyle$1(elementOrCss) : elementOrCss;
+	return isNotNone(css.transform) || isNotNone(css.translate) || isNotNone(css.scale) || isNotNone(css.rotate) || isNotNone(css.perspective) || !isWebKit() && (isNotNone(css.backdropFilter) || isNotNone(css.filter)) || willChangeRe.test(css.willChange || "") || containRe.test(css.contain || "");
+}
+function getContainingBlock(element) {
+	let currentNode = getParentNode(element);
+	while (isHTMLElement(currentNode) && !isLastTraversableNode(currentNode)) {
+		if (isContainingBlock(currentNode)) return currentNode;
+		else if (isTopLayer(currentNode)) return null;
+		currentNode = getParentNode(currentNode);
+	}
+	return null;
+}
+function isWebKit() {
+	if (isWebKitValue == null) isWebKitValue = typeof CSS !== "undefined" && CSS.supports && CSS.supports("-webkit-backdrop-filter", "none");
+	return isWebKitValue;
+}
+function isLastTraversableNode(node) {
+	return /^(html|body|#document)$/.test(getNodeName(node));
+}
+function getComputedStyle$1(element) {
+	return getWindow(element).getComputedStyle(element);
+}
+function getNodeScroll(element) {
+	if (isElement(element)) return {
+		scrollLeft: element.scrollLeft,
+		scrollTop: element.scrollTop
+	};
+	return {
+		scrollLeft: element.scrollX,
+		scrollTop: element.scrollY
+	};
+}
+function getParentNode(node) {
+	if (getNodeName(node) === "html") return node;
+	const result = node.assignedSlot || node.parentNode || isShadowRoot(node) && node.host || getDocumentElement(node);
+	return isShadowRoot(result) ? result.host : result;
+}
+function getNearestOverflowAncestor(node) {
+	const parentNode = getParentNode(node);
+	if (isLastTraversableNode(parentNode)) return (node.ownerDocument || node).body;
+	if (isHTMLElement(parentNode) && isOverflowElement(parentNode)) return parentNode;
+	return getNearestOverflowAncestor(parentNode);
+}
+function getOverflowAncestors(node, list, traverseIframes) {
+	var _node$ownerDocument2;
+	if (list === void 0) list = [];
+	if (traverseIframes === void 0) traverseIframes = true;
+	const scrollableAncestor = getNearestOverflowAncestor(node);
+	const isBody = scrollableAncestor === ((_node$ownerDocument2 = node.ownerDocument) == null ? void 0 : _node$ownerDocument2.body);
+	const win = getWindow(scrollableAncestor);
+	if (isBody) {
+		const frameElement = getFrameElement(win);
+		return list.concat(win, win.visualViewport || [], isOverflowElement(scrollableAncestor) ? scrollableAncestor : [], frameElement && traverseIframes ? getOverflowAncestors(frameElement) : []);
+	} else return list.concat(scrollableAncestor, getOverflowAncestors(scrollableAncestor, [], traverseIframes));
+}
+function getFrameElement(win) {
+	return win.parent && Object.getPrototypeOf(win.parent) ? win.frameElement : null;
+}
+//#endregion
+//#region node_modules/@floating-ui/dom/dist/floating-ui.dom.mjs
+function getCssDimensions(element) {
+	const css = getComputedStyle$1(element);
+	let width = parseFloat(css.width) || 0;
+	let height = parseFloat(css.height) || 0;
+	const hasOffset = isHTMLElement(element);
+	const offsetWidth = hasOffset ? element.offsetWidth : width;
+	const offsetHeight = hasOffset ? element.offsetHeight : height;
+	const shouldFallback = round(width) !== offsetWidth || round(height) !== offsetHeight;
+	if (shouldFallback) {
+		width = offsetWidth;
+		height = offsetHeight;
+	}
+	return {
+		width,
+		height,
+		$: shouldFallback
+	};
+}
+function unwrapElement(element) {
+	return !isElement(element) ? element.contextElement : element;
+}
+function getScale(element) {
+	const domElement = unwrapElement(element);
+	if (!isHTMLElement(domElement)) return createCoords(1);
+	const rect = domElement.getBoundingClientRect();
+	const { width, height, $ } = getCssDimensions(domElement);
+	let x = ($ ? round(rect.width) : rect.width) / width;
+	let y = ($ ? round(rect.height) : rect.height) / height;
+	if (!x || !Number.isFinite(x)) x = 1;
+	if (!y || !Number.isFinite(y)) y = 1;
+	return {
+		x,
+		y
+	};
+}
+var noOffsets = /*#__PURE__*/ createCoords(0);
+function getVisualOffsets(element) {
+	const win = getWindow(element);
+	if (!isWebKit() || !win.visualViewport) return noOffsets;
+	return {
+		x: win.visualViewport.offsetLeft,
+		y: win.visualViewport.offsetTop
+	};
+}
+function shouldAddVisualOffsets(element, isFixed, floatingOffsetParent) {
+	if (isFixed === void 0) isFixed = false;
+	return !!floatingOffsetParent && isFixed && floatingOffsetParent === getWindow(element);
+}
+function getBoundingClientRect(element, includeScale, isFixedStrategy, offsetParent) {
+	if (includeScale === void 0) includeScale = false;
+	if (isFixedStrategy === void 0) isFixedStrategy = false;
+	const clientRect = element.getBoundingClientRect();
+	const domElement = unwrapElement(element);
+	let scale = createCoords(1);
+	if (includeScale) if (offsetParent) {
+		if (isElement(offsetParent)) scale = getScale(offsetParent);
+	} else scale = getScale(element);
+	const visualOffsets = shouldAddVisualOffsets(domElement, isFixedStrategy, offsetParent) ? getVisualOffsets(domElement) : createCoords(0);
+	let x = (clientRect.left + visualOffsets.x) / scale.x;
+	let y = (clientRect.top + visualOffsets.y) / scale.y;
+	let width = clientRect.width / scale.x;
+	let height = clientRect.height / scale.y;
+	if (domElement && offsetParent) {
+		const win = getWindow(domElement);
+		const offsetWin = isElement(offsetParent) ? getWindow(offsetParent) : offsetParent;
+		let currentWin = win;
+		let currentIFrame = getFrameElement(currentWin);
+		while (currentIFrame && offsetWin !== currentWin) {
+			const iframeScale = getScale(currentIFrame);
+			const iframeRect = currentIFrame.getBoundingClientRect();
+			const css = getComputedStyle$1(currentIFrame);
+			const left = iframeRect.left + (currentIFrame.clientLeft + parseFloat(css.paddingLeft)) * iframeScale.x;
+			const top = iframeRect.top + (currentIFrame.clientTop + parseFloat(css.paddingTop)) * iframeScale.y;
+			x *= iframeScale.x;
+			y *= iframeScale.y;
+			width *= iframeScale.x;
+			height *= iframeScale.y;
+			x += left;
+			y += top;
+			currentWin = getWindow(currentIFrame);
+			currentIFrame = getFrameElement(currentWin);
+		}
+	}
+	return rectToClientRect({
+		width,
+		height,
+		x,
+		y
+	});
+}
+function getWindowScrollBarX(element, rect) {
+	const leftScroll = getNodeScroll(element).scrollLeft;
+	if (!rect) return getBoundingClientRect(getDocumentElement(element)).left + leftScroll;
+	return rect.left + leftScroll;
+}
+function getHTMLOffset(documentElement, scroll) {
+	const htmlRect = documentElement.getBoundingClientRect();
+	return {
+		x: htmlRect.left + scroll.scrollLeft - getWindowScrollBarX(documentElement, htmlRect),
+		y: htmlRect.top + scroll.scrollTop
+	};
+}
+function convertOffsetParentRelativeRectToViewportRelativeRect(_ref) {
+	let { elements, rect, offsetParent, strategy } = _ref;
+	const isFixed = strategy === "fixed";
+	const documentElement = getDocumentElement(offsetParent);
+	const topLayer = elements ? isTopLayer(elements.floating) : false;
+	if (offsetParent === documentElement || topLayer && isFixed) return rect;
+	let scroll = {
+		scrollLeft: 0,
+		scrollTop: 0
+	};
+	let scale = createCoords(1);
+	const offsets = createCoords(0);
+	const isOffsetParentAnElement = isHTMLElement(offsetParent);
+	if (isOffsetParentAnElement || !isFixed) {
+		if (getNodeName(offsetParent) !== "body" || isOverflowElement(documentElement)) scroll = getNodeScroll(offsetParent);
+		if (isOffsetParentAnElement) {
+			const offsetRect = getBoundingClientRect(offsetParent);
+			scale = getScale(offsetParent);
+			offsets.x = offsetRect.x + offsetParent.clientLeft;
+			offsets.y = offsetRect.y + offsetParent.clientTop;
+		}
+	}
+	const htmlOffset = documentElement && !isOffsetParentAnElement && !isFixed ? getHTMLOffset(documentElement, scroll) : createCoords(0);
+	return {
+		width: rect.width * scale.x,
+		height: rect.height * scale.y,
+		x: rect.x * scale.x - scroll.scrollLeft * scale.x + offsets.x + htmlOffset.x,
+		y: rect.y * scale.y - scroll.scrollTop * scale.y + offsets.y + htmlOffset.y
+	};
+}
+function getClientRects(element) {
+	return element.getClientRects ? Array.from(element.getClientRects()) : [];
+}
+function getDocumentRect(html) {
+	const scroll = getNodeScroll(html);
+	const body = html.ownerDocument.body;
+	const width = max(html.scrollWidth, html.clientWidth, body.scrollWidth, body.clientWidth);
+	const height = max(html.scrollHeight, html.clientHeight, body.scrollHeight, body.clientHeight);
+	let x = -scroll.scrollLeft + getWindowScrollBarX(html);
+	const y = -scroll.scrollTop;
+	if (getComputedStyle$1(body).direction === "rtl") x += max(html.clientWidth, body.clientWidth) - width;
+	return {
+		width,
+		height,
+		x,
+		y
+	};
+}
+var SCROLLBAR_MAX = 25;
+function getViewportRect(element, strategy, rootBoundary) {
+	if (rootBoundary === void 0) rootBoundary = "viewport";
+	const isLayoutViewport = rootBoundary === "layoutViewport";
+	const win = getWindow(element);
+	const html = getDocumentElement(element);
+	const visualViewport = win.visualViewport;
+	let width = html.clientWidth;
+	let height = html.clientHeight;
+	let x = 0;
+	let y = 0;
+	if (visualViewport) {
+		const layoutRelativeClientCoords = !isWebKit() || strategy === "fixed";
+		if (isLayoutViewport) {
+			if (!layoutRelativeClientCoords) {
+				x = -visualViewport.offsetLeft;
+				y = -visualViewport.offsetTop;
+			}
+		} else {
+			width = visualViewport.width;
+			height = visualViewport.height;
+			if (layoutRelativeClientCoords) {
+				x = visualViewport.offsetLeft;
+				y = visualViewport.offsetTop;
+			}
+		}
+	}
+	if (getWindowScrollBarX(html) <= 0) {
+		const doc = html.ownerDocument;
+		const body = doc.body;
+		const bodyStyles = getComputedStyle(body);
+		const bodyMarginInline = doc.compatMode === "CSS1Compat" ? parseFloat(bodyStyles.marginLeft) + parseFloat(bodyStyles.marginRight) || 0 : 0;
+		const reservedWidth = Math.abs(html.clientWidth - body.clientWidth - bodyMarginInline);
+		const gutter = getComputedStyle(html).scrollbarGutter === "stable both-edges" ? reservedWidth / 2 : reservedWidth;
+		if (gutter <= SCROLLBAR_MAX) width -= gutter;
+	}
+	return {
+		width,
+		height,
+		x,
+		y
+	};
+}
+function getInnerBoundingClientRect(element, strategy) {
+	const clientRect = getBoundingClientRect(element, true, strategy === "fixed");
+	const top = clientRect.top + element.clientTop;
+	const left = clientRect.left + element.clientLeft;
+	const scale = getScale(element);
+	return {
+		width: element.clientWidth * scale.x,
+		height: element.clientHeight * scale.y,
+		x: left * scale.x,
+		y: top * scale.y
+	};
+}
+function getClientRectFromClippingAncestor(element, clippingAncestor, strategy) {
+	let rect;
+	if (clippingAncestor === "viewport" || clippingAncestor === "layoutViewport") rect = getViewportRect(element, strategy, clippingAncestor);
+	else if (clippingAncestor === "document") rect = getDocumentRect(getDocumentElement(element));
+	else if (isElement(clippingAncestor)) rect = getInnerBoundingClientRect(clippingAncestor, strategy);
+	else {
+		const visualOffsets = getVisualOffsets(element);
+		rect = {
+			x: clippingAncestor.x - visualOffsets.x,
+			y: clippingAncestor.y - visualOffsets.y,
+			width: clippingAncestor.width,
+			height: clippingAncestor.height
+		};
+	}
+	return rectToClientRect(rect);
+}
+function getClippingElementAncestors(element, cache) {
+	const cachedResult = cache.get(element);
+	if (cachedResult) return cachedResult;
+	let result = getOverflowAncestors(element, [], false).filter((el) => isElement(el) && getNodeName(el) !== "body");
+	let lastKeptComputedStyle = null;
+	const elementIsFixed = getComputedStyle$1(element).position === "fixed";
+	let currentNode = elementIsFixed ? getParentNode(element) : element;
+	while (isElement(currentNode) && !isLastTraversableNode(currentNode)) {
+		const computedStyle = getComputedStyle$1(currentNode);
+		const currentNodeIsContaining = isContainingBlock(currentNode);
+		const lastPosition = lastKeptComputedStyle ? lastKeptComputedStyle.position : elementIsFixed ? "fixed" : "";
+		if (!currentNodeIsContaining && (lastPosition === "fixed" || lastPosition === "absolute" && computedStyle.position === "static")) result = result.filter((ancestor) => ancestor !== currentNode);
+		else lastKeptComputedStyle = computedStyle;
+		currentNode = getParentNode(currentNode);
+	}
+	cache.set(element, result);
+	return result;
+}
+function getClippingRect(_ref) {
+	let { element, boundary, rootBoundary, strategy } = _ref;
+	const clippingAncestors = [...boundary === "clippingAncestors" ? isTopLayer(element) ? [] : getClippingElementAncestors(element, this._c) : [].concat(boundary), rootBoundary];
+	const firstRect = getClientRectFromClippingAncestor(element, clippingAncestors[0], strategy);
+	let top = firstRect.top;
+	let right = firstRect.right;
+	let bottom = firstRect.bottom;
+	let left = firstRect.left;
+	for (let i = 1; i < clippingAncestors.length; i++) {
+		const rect = getClientRectFromClippingAncestor(element, clippingAncestors[i], strategy);
+		top = max(rect.top, top);
+		right = min(rect.right, right);
+		bottom = min(rect.bottom, bottom);
+		left = max(rect.left, left);
+	}
+	return {
+		width: right - left,
+		height: bottom - top,
+		x: left,
+		y: top
+	};
+}
+function getDimensions(element) {
+	const { width, height } = getCssDimensions(element);
+	return {
+		width,
+		height
+	};
+}
+function getRectRelativeToOffsetParent(element, offsetParent, strategy) {
+	const isOffsetParentAnElement = isHTMLElement(offsetParent);
+	const documentElement = getDocumentElement(offsetParent);
+	const isFixed = strategy === "fixed";
+	const rect = getBoundingClientRect(element, true, isFixed, offsetParent);
+	let scroll = {
+		scrollLeft: 0,
+		scrollTop: 0
+	};
+	const offsets = createCoords(0);
+	if (isOffsetParentAnElement || !isFixed) {
+		if (getNodeName(offsetParent) !== "body" || isOverflowElement(documentElement)) scroll = getNodeScroll(offsetParent);
+		if (isOffsetParentAnElement) {
+			const offsetRect = getBoundingClientRect(offsetParent, true, isFixed, offsetParent);
+			offsets.x = offsetRect.x + offsetParent.clientLeft;
+			offsets.y = offsetRect.y + offsetParent.clientTop;
+		}
+	}
+	if (!isOffsetParentAnElement && documentElement) offsets.x = getWindowScrollBarX(documentElement);
+	const htmlOffset = documentElement && !isOffsetParentAnElement && !isFixed ? getHTMLOffset(documentElement, scroll) : createCoords(0);
+	return {
+		x: rect.left + scroll.scrollLeft - offsets.x - htmlOffset.x,
+		y: rect.top + scroll.scrollTop - offsets.y - htmlOffset.y,
+		width: rect.width,
+		height: rect.height
+	};
+}
+function isStaticPositioned(element) {
+	return getComputedStyle$1(element).position === "static";
+}
+function getTrueOffsetParent(element, polyfill) {
+	if (!isHTMLElement(element) || getComputedStyle$1(element).position === "fixed") return null;
+	if (polyfill) return polyfill(element);
+	let rawOffsetParent = element.offsetParent;
+	if (getDocumentElement(element) === rawOffsetParent) rawOffsetParent = rawOffsetParent.ownerDocument.body;
+	return rawOffsetParent;
+}
+function getOffsetParent(element, polyfill) {
+	const win = getWindow(element);
+	if (isTopLayer(element)) return win;
+	if (!isHTMLElement(element)) {
+		let svgOffsetParent = getParentNode(element);
+		while (svgOffsetParent && !isLastTraversableNode(svgOffsetParent)) {
+			if (isElement(svgOffsetParent) && !isStaticPositioned(svgOffsetParent)) return svgOffsetParent;
+			svgOffsetParent = getParentNode(svgOffsetParent);
+		}
+		return win;
+	}
+	let offsetParent = getTrueOffsetParent(element, polyfill);
+	while (offsetParent && isTableElement(offsetParent) && isStaticPositioned(offsetParent)) offsetParent = getTrueOffsetParent(offsetParent, polyfill);
+	if (offsetParent && isLastTraversableNode(offsetParent) && isStaticPositioned(offsetParent) && !isContainingBlock(offsetParent)) return win;
+	return offsetParent || getContainingBlock(element) || win;
+}
+var getElementRects = async function(data) {
+	const getOffsetParentFn = this.getOffsetParent || getOffsetParent;
+	const getDimensionsFn = this.getDimensions;
+	const floatingDimensions = await getDimensionsFn(data.floating);
+	return {
+		reference: getRectRelativeToOffsetParent(data.reference, await getOffsetParentFn(data.floating), data.strategy),
+		floating: {
+			x: 0,
+			y: 0,
+			width: floatingDimensions.width,
+			height: floatingDimensions.height
+		}
+	};
+};
+function isRTL(element) {
+	return getComputedStyle$1(element).direction === "rtl";
+}
+var platform = {
+	convertOffsetParentRelativeRectToViewportRelativeRect,
+	getDocumentElement,
+	getClippingRect,
+	getOffsetParent,
+	getElementRects,
+	getClientRects,
+	getDimensions,
+	getScale,
+	isElement,
+	isRTL
+};
+function rectsAreEqual(a, b) {
+	return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+}
+function observeMove(element, onMove, ancestorResize) {
+	let io = null;
+	let timeoutId;
+	const root = getDocumentElement(element);
+	function cleanup() {
+		var _io;
+		clearTimeout(timeoutId);
+		(_io = io) == null || _io.disconnect();
+		io = null;
+	}
+	function refresh(skip, threshold) {
+		if (skip === void 0) skip = false;
+		if (threshold === void 0) threshold = 1;
+		cleanup();
+		const elementRectForRootMargin = element.getBoundingClientRect();
+		const { left, top, width, height } = elementRectForRootMargin;
+		if (!skip) onMove();
+		if (!width || !height) return;
+		const insetTop = floor(top);
+		const insetRight = floor(root.clientWidth - (left + width));
+		const insetBottom = floor(root.clientHeight - (top + height));
+		const insetLeft = floor(left);
+		const options = {
+			rootMargin: -insetTop + "px " + -insetRight + "px " + -insetBottom + "px " + -insetLeft + "px",
+			threshold: max(0, min(1, threshold)) || 1
+		};
+		let isFirstUpdate = true;
+		function handleObserve(entries) {
+			const ratio = entries[0].intersectionRatio;
+			if (!rectsAreEqual(elementRectForRootMargin, element.getBoundingClientRect())) return refresh();
+			if (ratio !== threshold) {
+				if (!isFirstUpdate) return refresh();
+				if (!ratio) timeoutId = setTimeout(() => {
+					refresh(false, 1e-7);
+				}, 1e3);
+				else refresh(false, ratio);
+			}
+			isFirstUpdate = false;
+		}
+		try {
+			io = new IntersectionObserver(handleObserve, {
+				...options,
+				root: root.ownerDocument
+			});
+		} catch (_e) {
+			io = new IntersectionObserver(handleObserve, options);
+		}
+		io.observe(element);
+	}
+	const win = getWindow(element);
+	const handleResize = () => refresh(ancestorResize);
+	win.addEventListener("resize", handleResize);
+	refresh(true);
+	return () => {
+		win.removeEventListener("resize", handleResize);
+		cleanup();
+	};
+}
+/**
+* Automatically updates the position of the floating element when necessary.
+* Should only be called when the floating element is mounted on the DOM or
+* visible on the screen.
+* @returns cleanup function that should be invoked when the floating element is
+* removed from the DOM or hidden from the screen.
+* @see https://floating-ui.com/docs/autoUpdate
+*/
+function autoUpdate(reference, floating, update, options) {
+	if (options === void 0) options = {};
+	const { ancestorScroll = true, ancestorResize = true, elementResize = typeof ResizeObserver === "function", layoutShift = typeof IntersectionObserver === "function", animationFrame = false } = options;
+	const referenceEl = unwrapElement(reference);
+	const ancestors = ancestorScroll || ancestorResize ? [...referenceEl ? getOverflowAncestors(referenceEl) : [], ...floating ? getOverflowAncestors(floating) : []] : [];
+	ancestors.forEach((ancestor) => {
+		ancestorScroll && ancestor.addEventListener("scroll", update);
+		ancestorResize && ancestor.addEventListener("resize", update);
+	});
+	const cleanupIo = referenceEl && layoutShift ? observeMove(referenceEl, update, ancestorResize) : null;
+	let reobserveFrame = -1;
+	let resizeObserver = null;
+	if (elementResize) {
+		resizeObserver = new ResizeObserver((_ref) => {
+			let [firstEntry] = _ref;
+			if (firstEntry && firstEntry.target === referenceEl && resizeObserver && floating) {
+				resizeObserver.unobserve(floating);
+				cancelAnimationFrame(reobserveFrame);
+				reobserveFrame = requestAnimationFrame(() => {
+					var _resizeObserver;
+					(_resizeObserver = resizeObserver) == null || _resizeObserver.observe(floating);
+				});
+			}
+			update();
+		});
+		if (referenceEl && !animationFrame) resizeObserver.observe(referenceEl);
+		if (floating) resizeObserver.observe(floating);
+	}
+	let frameId;
+	let prevRefRect = animationFrame ? getBoundingClientRect(reference) : null;
+	if (animationFrame) frameLoop();
+	function frameLoop() {
+		const nextRefRect = getBoundingClientRect(reference);
+		if (prevRefRect && !rectsAreEqual(prevRefRect, nextRefRect)) update();
+		prevRefRect = nextRefRect;
+		frameId = requestAnimationFrame(frameLoop);
+	}
+	update();
+	return () => {
+		var _resizeObserver2;
+		ancestors.forEach((ancestor) => {
+			ancestorScroll && ancestor.removeEventListener("scroll", update);
+			ancestorResize && ancestor.removeEventListener("resize", update);
+		});
+		cleanupIo?.();
+		(_resizeObserver2 = resizeObserver) == null || _resizeObserver2.disconnect();
+		resizeObserver = null;
+		if (animationFrame) cancelAnimationFrame(frameId);
+	};
+}
+/**
+* Modifies the placement by translating the floating element along the
+* specified axes.
+* A number (shorthand for `mainAxis` or distance), or an axes configuration
+* object may be passed.
+* @see https://floating-ui.com/docs/offset
+*/
+var offset = offset$1;
+/**
+* Optimizes the visibility of the floating element by shifting it in order to
+* keep it in view when it will overflow the clipping boundary.
+* @see https://floating-ui.com/docs/shift
+*/
+var shift = shift$1;
+/**
+* Optimizes the visibility of the floating element by flipping the `placement`
+* in order to keep it in view when the preferred placement(s) will overflow the
+* clipping boundary. Alternative to `autoPlacement`.
+* @see https://floating-ui.com/docs/flip
+*/
+var flip = flip$1;
+/**
+* Provides data that allows you to change the size of the floating element —
+* for instance, prevent it from overflowing the clipping boundary or match the
+* width of the reference element.
+* @see https://floating-ui.com/docs/size
+*/
+var size = size$1;
+/**
+* Computes the `x` and `y` coordinates that will place the floating element
+* next to a given reference element.
+*/
+var computePosition = (reference, floating, options) => {
+	const cache = /* @__PURE__ */ new Map();
+	const mergedOptions = options != null ? options : {};
+	const platformWithCache = {
+		...platform,
+		...mergedOptions.platform,
+		_c: cache
+	};
+	return computePosition$1(reference, floating, {
+		...mergedOptions,
+		platform: platformWithCache
+	});
+};
+//#endregion
+//#region src/lib/download.ts
+/**
+* Download options model for the popup. Turns a playurl result into the
+* concrete files a user can save (merged MP4, video-only, audio-only, or DURL
+* files), each with its segments, filename and known size. Pure data: no DOM,
+* no network.
+*/
+var RESERVED_FILENAME_CHARS = /[\\/:*?"<>|]/g;
+var MAX_FILENAME_LENGTH = 180;
+function sanitizeFilename(name) {
+	return Array.from(name, (c) => c.charCodeAt(0) < 32 ? " " : c).join("").replace(RESERVED_FILENAME_CHARS, "_").replace(/\s+/g, " ").trim().replace(/^\.+|\.+$/g, "").slice(0, MAX_FILENAME_LENGTH) || "bilibili";
+}
+function safeExtension(url, fallback) {
+	try {
+		return extensionForUrl(url) || fallback;
+	} catch {
+		return fallback;
+	}
+}
+function knownSum(sizes) {
+	if (sizes.some((s) => !s)) return void 0;
+	return sizes.reduce((sum, s) => sum + (s ?? 0), 0);
+}
+function buildDownloadOptions(info) {
+	if (info.code !== ErrorCode.OK) return [];
+	const base = sanitizeFilename(info.title || "bilibili");
+	if (info.dash) {
+		const audio = streamToSegment(info.dash.audio);
+		const video = streamToSegment(info.dash.video);
+		const options = [];
+		if (audio.url && video.url) options.push({
+			id: `merged:${video.url}`,
+			kind: "merged",
+			label: "完整视频",
+			detail: "画面 + 声音",
+			format: "MP4",
+			filename: `${base}.mp4`,
+			segments: [audio, video],
+			size: knownSum([audio.size, video.size]),
+			recommended: true
+		});
+		if (video.url) options.push({
+			id: `video:${video.url}`,
+			kind: "video",
+			label: "仅画面",
+			detail: "无声音",
+			format: "MP4",
+			filename: `${base}_视频.mp4`,
+			segments: [video],
+			size: video.size,
+			recommended: false
+		});
+		if (audio.url) options.push({
+			id: `audio:${audio.url}`,
+			kind: "audio",
+			label: "仅声音",
+			detail: "音频轨",
+			format: "M4A",
+			filename: `${base}_音频.m4a`,
+			segments: [audio],
+			size: audio.size,
+			recommended: false
+		});
+		return options;
+	}
+	const durl = (info.durl ?? []).filter((seg) => !!seg.url);
+	const multiple = durl.length > 1;
+	return durl.map((seg, i) => {
+		const ext = safeExtension(seg.url, ".flv");
+		return {
+			id: `file:${seg.url}`,
+			kind: "file",
+			label: multiple ? `分段 ${i + 1}/${durl.length}` : "完整视频",
+			detail: multiple ? `第 ${i + 1} 段` : "画面 + 声音",
+			format: ext.slice(1).toUpperCase(),
+			filename: multiple ? `${base}_分段${i + 1}${ext}` : `${base}${ext}`,
+			segments: [{
+				url: seg.url,
+				backups: seg.backup_url ?? [],
+				size: seg.size
+			}],
+			size: seg.size,
+			recommended: !multiple
+		};
+	});
+}
+var CODEC_BY_PREFIX = [
+	["avc", "AVC"],
+	["hev", "HEVC"],
+	["hvc", "HEVC"],
+	["av01", "AV1"]
+];
+var CODEC_BY_ID = {
+	7: "AVC",
+	12: "HEVC",
+	13: "AV1"
+};
+function codecLabel(stream) {
+	const codecs = stream.codecs?.toLowerCase() ?? "";
+	const byPrefix = CODEC_BY_PREFIX.find(([prefix]) => codecs.startsWith(prefix));
+	if (byPrefix) return byPrefix[1];
+	return stream.codecid !== void 0 ? CODEC_BY_ID[stream.codecid] : void 0;
+}
+/** Short facts about the selected streams, shown as chips under the title. */
+function describeStreams(info) {
+	if (info.code !== ErrorCode.OK) return [];
+	const facts = [];
+	const video = info.dash?.video;
+	if (video?.width && video.height) facts.push(`${video.width}×${video.height}`);
+	const codec = video ? codecLabel(video) : void 0;
+	if (codec) facts.push(codec);
+	if (!info.dash && info.durl?.length) facts.push(safeExtension(info.durl[0].url, ".flv").slice(1).toUpperCase());
+	return facts;
+}
+//#endregion
+//#region src/lib/popup/styles.ts
+/**
+* Styles for the download popup's shadow root. Colors read Bilibili's own CSS
+* custom properties (they inherit through the shadow boundary), so the popup
+* follows the site's light and dark themes; the fallbacks are the light values.
+*/
+var POPUP_STYLES = `
+:host {
+	position: fixed;
+	top: 0;
+	left: 0;
+	z-index: 100000;
+	font-size: 13px;
+	line-height: 1.5;
+	color: var(--fg1);
+	text-align: left;
+	letter-spacing: normal;
+	--pink: var(--brand_pink, #ff6699);
+	--blue: var(--brand_blue, #00aeec);
+	--green: #20b26c;
+	--red: #f85a54;
+	--surface: var(--bg1_float, var(--bg1, #ffffff));
+	--muted: var(--graph_bg_regular, #f1f2f3);
+	--hover: var(--graph_bg_thin, #f6f7f8);
+	--line: var(--line_regular, #e3e5e7);
+	/* Separate local names: a property that references itself is a cycle and both values drop. */
+	--fg1: var(--text1, #18191c);
+	--fg2: var(--text2, #61666d);
+	--fg3: var(--text3, #9499a0);
+}
+* { box-sizing: border-box; }
+svg { width: 16px; height: 16px; display: block; flex: none; }
+button { font: inherit; color: inherit; }
+
+.panel {
+	width: 372px;
+	max-width: calc(100vw - 16px);
+	display: flex;
+	flex-direction: column;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: 12px;
+	box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.06);
+	overflow: hidden;
+	animation: pop-in 140ms ease-out;
+}
+@keyframes pop-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } }
+
+.head { display: flex; align-items: flex-start; gap: 8px; padding: 14px 10px 12px 16px; }
+.heading { flex: 1; min-width: 0; }
+.eyebrow { display: flex; align-items: center; gap: 4px; margin: 0 0 4px; font-size: 12px; color: var(--fg3); }
+.eyebrow svg { width: 14px; height: 14px; color: var(--pink); }
+.title {
+	margin: 0;
+	font-size: 14px;
+	font-weight: 600;
+	line-height: 20px;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+	word-break: break-word;
+}
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.chip {
+	font-size: 11px;
+	line-height: 18px;
+	padding: 0 6px;
+	border-radius: 4px;
+	background: var(--muted);
+	color: var(--fg2);
+	font-variant-numeric: tabular-nums;
+}
+.chip.quality { background: rgba(255, 102, 153, 0.12); color: var(--pink); font-weight: 600; }
+
+.icon-btn {
+	flex: none;
+	width: 28px;
+	height: 28px;
+	display: grid;
+	place-items: center;
+	padding: 0;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--fg3);
+	cursor: pointer;
+}
+.icon-btn:hover { background: var(--muted); color: var(--fg1); }
+.icon-btn.copied { color: var(--green); }
+.icon-btn:focus-visible, .btn:focus-visible, .text-btn:focus-visible {
+	outline: 2px solid var(--blue);
+	outline-offset: 1px;
+}
+
+/* The option list keeps its space; when the panel is height-capped the log panel shrinks first. */
+.body { flex: 0 1 auto; min-height: 0; overflow-y: auto; border-top: 1px solid var(--line); }
+.options { list-style: none; margin: 0; padding: 6px; }
+.row { display: flex; align-items: center; gap: 12px; margin: 0; padding: 10px; border-radius: 8px; }
+.row:hover { background: var(--hover); }
+.tile {
+	flex: none;
+	width: 36px;
+	height: 36px;
+	display: grid;
+	place-items: center;
+	border-radius: 8px;
+	background: var(--muted);
+	color: var(--fg2);
+}
+.tile svg { width: 18px; height: 18px; }
+.row[data-recommended] .tile { background: rgba(255, 102, 153, 0.12); color: var(--pink); }
+.row[data-status='done'] .tile { background: rgba(32, 178, 108, 0.12); color: var(--green); }
+.row[data-status='error'] .tile { background: rgba(248, 90, 84, 0.12); color: var(--red); }
+.main { flex: 1; min-width: 0; }
+.line1 { display: flex; align-items: center; gap: 6px; font-weight: 500; }
+.badge {
+	font-size: 10px;
+	line-height: 16px;
+	padding: 0 5px;
+	border-radius: 4px;
+	background: var(--pink);
+	color: #fff;
+}
+.percent { margin-left: auto; font-size: 12px; color: var(--fg2); font-variant-numeric: tabular-nums; }
+.line2 {
+	font-size: 12px;
+	color: var(--fg3);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	font-variant-numeric: tabular-nums;
+}
+.row[data-status='done'] .line2 { color: var(--green); }
+.row[data-status='error'] .line2 { color: var(--red); white-space: normal; word-break: break-word; }
+.bar { height: 4px; margin: 6px 0 4px; border-radius: 2px; background: var(--muted); overflow: hidden; }
+.bar > span { display: block; height: 100%; border-radius: inherit; background: var(--pink); transition: width 200ms linear; }
+.bar.indeterminate > span { width: 40%; animation: slide 1.1s ease-in-out infinite; }
+@keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+.actions { flex: none; display: flex; align-items: center; gap: 2px; }
+
+.btn {
+	height: 30px;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 0 12px;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	background: transparent;
+	color: var(--fg1);
+	font-size: 13px;
+	font-weight: 500;
+	white-space: nowrap;
+	text-decoration: none;
+	cursor: pointer;
+}
+.btn svg { width: 14px; height: 14px; }
+.btn:hover { border-color: var(--pink); color: var(--pink); }
+.btn.primary { border-color: var(--pink); background: var(--pink); color: #fff; }
+.btn.primary:hover { filter: brightness(1.08); color: #fff; }
+
+.state { padding: 32px 24px; text-align: center; color: var(--fg3); }
+.state svg { width: 28px; height: 28px; margin: 0 auto 10px; }
+.state.error svg { color: var(--red); }
+.state strong { display: block; margin-bottom: 4px; color: var(--fg1); font-weight: 500; }
+.spinner {
+	width: 22px;
+	height: 22px;
+	margin: 0 auto 12px;
+	border: 2px solid var(--muted);
+	border-top-color: var(--pink);
+	border-radius: 50%;
+	animation: spin 800ms linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.head, .foot { flex: none; }
+.foot {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 10px 8px 16px;
+	border-top: 1px solid var(--line);
+	font-size: 12px;
+	color: var(--fg3);
+}
+.hint { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; }
+.hint svg, .text-btn svg { width: 14px; height: 14px; }
+.text-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	padding: 2px 6px;
+	border: 0;
+	border-radius: 4px;
+	background: none;
+	color: var(--fg3);
+	font-size: 12px;
+	cursor: pointer;
+}
+.text-btn:hover { color: var(--blue); background: var(--muted); }
+.text-btn[aria-expanded='true'] svg { transform: rotate(180deg); }
+.count { font-variant-numeric: tabular-nums; }
+
+.logs {
+	flex: 0 1000 auto;
+	min-height: 64px;
+	display: flex;
+	flex-direction: column;
+	border-top: 1px solid var(--line);
+	background: var(--hover);
+}
+.logs-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px 0 16px; font-size: 12px; color: var(--fg3); }
+.log-lines {
+	flex: 0 1 auto;
+	min-height: 0;
+	margin: 0;
+	padding: 4px 16px 10px;
+	max-height: 160px;
+	overflow: auto;
+	font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	color: var(--fg2);
+	white-space: pre-wrap;
+	word-break: break-all;
+}
+.log-lines:empty::before { content: '暂无日志'; color: var(--fg3); }
+
+@media (prefers-reduced-motion: reduce) {
+	.panel, .bar > span, .bar.indeterminate > span, .spinner { animation: none; transition: none; }
+}
+`;
+//#endregion
+//#region src/lib/popup/icons.ts
+/** Inline SVG icons (Lucide-style strokes, 24px grid) for the download popup. */
+var svg = (body) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+var ICONS = {
+	download: svg("<path d=\"M12 4v11\"/><path d=\"m7 10 5 5 5-5\"/><path d=\"M5 20h14\"/>"),
+	film: svg("<rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"3\"/><path d=\"M10 9.2v5.6a.5.5 0 0 0 .76.43l4.5-2.8a.5.5 0 0 0 0-.86l-4.5-2.8a.5.5 0 0 0-.76.43z\" fill=\"currentColor\"/>"),
+	image: svg("<rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"3\"/><path d=\"m3 16 5-5 4 4 3-3 6 6\"/>"),
+	music: svg("<path d=\"M9 18V6l11-2v12\"/><circle cx=\"6\" cy=\"18\" r=\"3\"/><circle cx=\"17\" cy=\"16\" r=\"3\"/>"),
+	check: svg("<path d=\"m5 12.5 4.5 4.5L19 7.5\"/>"),
+	alert: svg("<circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M12 7.5v5\"/><path d=\"M12 16.5h.01\"/>"),
+	close: svg("<path d=\"M6 6l12 12\"/><path d=\"M18 6 6 18\"/>"),
+	link: svg("<path d=\"M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1\"/><path d=\"M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1\"/>"),
+	retry: svg("<path d=\"M20 12a8 8 0 1 1-2.34-5.66L20 8.5\"/><path d=\"M20 3.5v5h-5\"/>"),
+	info: svg("<circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M12 11v5\"/><path d=\"M12 7.5h.01\"/>"),
+	chevron: svg("<path d=\"m6 9 6 6 6-6\"/>"),
+	copy: svg("<rect x=\"8\" y=\"8\" width=\"12\" height=\"12\" rx=\"2\"/><path d=\"M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2\"/>")
+};
+//#endregion
+//#region src/lib/popup/view.ts
+/**
+* DOM builders for the download popup. Every function returns fresh nodes built
+* with createElement/textContent, so titles and URLs never pass through HTML
+* parsing. Interactive elements carry `data-action` (and `data-id` for rows);
+* the controller handles them by event delegation.
+*/
+function h(tag, attrs = {}, ...children) {
+	const el = document.createElement(tag);
+	for (const [name, value] of Object.entries(attrs)) {
+		if (value === void 0 || value === false) continue;
+		el.setAttribute(name, value === true ? "" : value);
+	}
+	for (const child of children) {
+		if (child === null || child === void 0 || child === false) continue;
+		el.append(child);
+	}
+	return el;
+}
+function icon(name) {
+	const wrap = document.createElement("span");
+	wrap.style.display = "contents";
+	wrap.innerHTML = ICONS[name];
+	return wrap;
+}
+function joinFacts(facts) {
+	return facts.filter(Boolean).join(" · ");
+}
+function knownSize(bytes) {
+	return bytes ? formatSize(bytes) : void 0;
+}
+function headerTitle(info) {
+	if (!info) return "正在获取视频信息";
+	if (info.title) return info.title;
+	return info.code === ErrorCode.OK ? "未命名视频" : "无法获取下载地址";
+}
+function renderHeader(info) {
+	const chips = info ? [info.quality, ...describeStreams(info)].filter((c) => !!c) : [];
+	return h("div", { class: "head" }, h("div", { class: "heading" }, h("p", { class: "eyebrow" }, icon("download"), "下载视频"), h("h2", {
+		class: "title",
+		id: "bh-title",
+		title: info?.title
+	}, headerTitle(info)), chips.length > 0 && h("div", { class: "chips" }, ...chips.map((c, i) => h("span", { class: i === 0 && info?.quality ? "chip quality" : "chip" }, c)))), h("button", {
+		class: "icon-btn",
+		type: "button",
+		"data-action": "close",
+		title: "关闭",
+		"aria-label": "关闭"
+	}, icon("close")));
+}
+var KIND_ICON = {
+	merged: "film",
+	file: "film",
+	video: "image",
+	audio: "music"
+};
+function formatSpeed(received, startedAt, now) {
+	const seconds = (now - startedAt) / 1e3;
+	if (seconds < 1 || received <= 0) return void 0;
+	return `${formatSize(received / seconds)}/s`;
+}
+function renderRow(option, state, now, index) {
+	const status = state?.status ?? "idle";
+	const tileIcon = status === "done" ? "check" : status === "error" ? "alert" : KIND_ICON[option.kind];
+	const labelId = `bh-option-${index}`;
+	let percent;
+	let line2;
+	let bar = null;
+	const actions = [];
+	switch (state?.status) {
+		case "downloading": {
+			const pct = state.total > 0 ? Math.min(100, Math.floor(state.received / state.total * 100)) : null;
+			percent = pct === null ? void 0 : `${pct}%`;
+			line2 = joinFacts([state.received <= 0 ? "正在连接…" : state.total > 0 ? `${formatSize(state.received)} / ${formatSize(state.total)}` : formatSize(state.received), formatSpeed(state.received, state.startedAt, now)]);
+			bar = h("div", {
+				class: pct === null ? "bar indeterminate" : "bar",
+				role: "progressbar",
+				"aria-labelledby": labelId,
+				"aria-valuemin": "0",
+				"aria-valuemax": "100",
+				"aria-valuenow": pct === null ? void 0 : String(pct)
+			}, h("span", { style: pct === null ? void 0 : `width:${pct}%` }));
+			break;
+		}
+		case "merging":
+			line2 = "正在合并画面与声音…";
+			bar = h("div", {
+				class: "bar indeterminate",
+				role: "progressbar",
+				"aria-labelledby": labelId
+			}, h("span"));
+			break;
+		case "done":
+			line2 = joinFacts([
+				"已保存",
+				option.format,
+				knownSize(state.size)
+			]);
+			actions.push(h("a", {
+				class: "btn",
+				href: state.url,
+				download: option.filename,
+				title: option.filename
+			}, "再次保存"));
+			break;
+		case "error":
+			line2 = `下载失败：${state.message}`;
+			actions.push(h("button", {
+				class: "btn",
+				type: "button",
+				"data-action": "download",
+				"data-id": option.id
+			}, icon("retry"), "重试"));
+			break;
+		default:
+			line2 = joinFacts([
+				option.format,
+				option.detail,
+				knownSize(option.size)
+			]);
+			if (option.kind !== "merged") actions.push(h("button", {
+				class: "icon-btn",
+				type: "button",
+				"data-action": "copy",
+				"data-id": option.id,
+				title: "复制直链",
+				"aria-label": `复制${option.label}直链`
+			}, icon("link")));
+			actions.push(h("button", {
+				class: option.recommended ? "btn primary" : "btn",
+				type: "button",
+				"data-action": "download",
+				"data-id": option.id,
+				"aria-label": `下载${option.label}`
+			}, icon("download"), "下载"));
+	}
+	return h("li", {
+		class: "row",
+		"data-row": option.id,
+		"data-status": status,
+		"data-recommended": option.recommended
+	}, h("span", { class: "tile" }, icon(tileIcon)), h("div", { class: "main" }, h("div", { class: "line1" }, h("span", { id: labelId }, option.label), option.recommended && status === "idle" && h("span", { class: "badge" }, "推荐"), percent && h("span", { class: "percent" }, percent)), bar, h("div", {
+		class: "line2",
+		title: line2
+	}, line2)), actions.length > 0 && h("div", { class: "actions" }, ...actions));
+}
+function renderBody(info, rows) {
+	if (!info) return h("div", { class: "body" }, h("div", {
+		class: "state",
+		role: "status"
+	}, h("div", { class: "spinner" }), "正在解析视频地址…"));
+	if (info.code !== ErrorCode.OK || rows.length === 0) return h("div", { class: "body" }, h("div", {
+		class: "state error",
+		role: "alert"
+	}, icon("alert"), h("strong", {}, info.message || "没有找到可下载的视频流"), "可以尝试刷新页面、登录账号，或在播放器中切换清晰度后重试"));
+	return h("div", { class: "body" }, h("ul", {
+		class: "options",
+		"aria-label": "下载选项"
+	}, ...rows));
+}
+function renderFooter(logCount, logsOpen) {
+	return h("div", { class: "foot" }, h("span", { class: "hint" }, icon("info"), "清晰度跟随播放器，切换后自动更新"), h("button", {
+		class: "text-btn",
+		type: "button",
+		"data-action": "toggle-logs",
+		"aria-expanded": String(logsOpen),
+		"aria-controls": "bh-logs"
+	}, "日志", h("span", { class: "count" }, logCount > 0 ? ` ${logCount}` : ""), icon("chevron")));
+}
+function renderLogs(lines) {
+	return h("div", {
+		class: "logs",
+		id: "bh-logs"
+	}, h("div", { class: "logs-head" }, h("span", {}, "运行日志"), h("button", {
+		class: "text-btn",
+		type: "button",
+		"data-action": "copy-logs"
+	}, icon("copy"), "复制")), h("pre", { class: "log-lines" }, lines.join("\n")));
+}
+//#endregion
+//#region src/lib/popup/popup.ts
+/**
+* Download popup controller. Owns the shadow-DOM panel anchored to the toolbar
+* button: renders the current download options, patches single rows as task
+* progress arrives, keeps a bounded log buffer, and handles dismissal.
+*/
+var POPUP_HOST_ID = "bilibili-helper-popup";
+var MAX_LOG_LINES = 300;
+var VIEWPORT_PADDING = 8;
+var COPIED_FEEDBACK_MS = 1500;
+var schedule$1 = typeof requestAnimationFrame === "function" ? (cb) => requestAnimationFrame(cb) : (cb) => setTimeout(cb, 16);
+var DownloadPopup = class {
+	tasks;
+	now;
+	onToggle;
+	info = null;
+	options = [];
+	logs = [];
+	logsOpen = false;
+	host = null;
+	panel = null;
+	anchor = null;
+	placement = "bottom-start";
+	stopAutoUpdate = null;
+	rowEls = /* @__PURE__ */ new Map();
+	dirtyRows = /* @__PURE__ */ new Set();
+	frameQueued = false;
+	focusOnReveal = false;
+	unsubscribe;
+	constructor(tasks, now = () => Date.now(), onToggle = () => {}) {
+		this.tasks = tasks;
+		this.now = now;
+		this.onToggle = onToggle;
+		this.unsubscribe = tasks.subscribe((id) => this.queueRow(id));
+	}
+	isOpen() {
+		return this.host !== null;
+	}
+	setInfo(info) {
+		this.info = info;
+		this.options = info ? buildDownloadOptions(info) : [];
+		this.tasks.retain(new Set(this.options.map((o) => o.id)));
+		this.render();
+	}
+	toggle(anchor, placement) {
+		if (this.isOpen()) this.close();
+		else this.open(anchor, placement);
+	}
+	open(anchor, placement) {
+		if (this.isOpen()) this.close();
+		this.anchor = anchor;
+		this.placement = placement;
+		const host = document.createElement("div");
+		host.id = POPUP_HOST_ID;
+		host.style.visibility = "hidden";
+		const root = host.attachShadow({ mode: "open" });
+		const style = document.createElement("style");
+		style.textContent = POPUP_STYLES;
+		this.panel = document.createElement("div");
+		this.panel.className = "panel";
+		this.panel.setAttribute("role", "dialog");
+		this.panel.setAttribute("aria-labelledby", "bh-title");
+		root.append(style, this.panel);
+		root.addEventListener("click", this.onClick);
+		document.body.appendChild(host);
+		this.host = host;
+		document.addEventListener("pointerdown", this.onPointerDown, true);
+		document.addEventListener("keydown", this.onKeyDown, true);
+		this.stopAutoUpdate = autoUpdate(anchor, host, () => this.position());
+		this.focusOnReveal = true;
+		this.render();
+		this.onToggle(true);
+	}
+	close() {
+		if (!this.host) return;
+		this.stopAutoUpdate?.();
+		this.stopAutoUpdate = null;
+		document.removeEventListener("pointerdown", this.onPointerDown, true);
+		document.removeEventListener("keydown", this.onKeyDown, true);
+		this.host.remove();
+		this.host = null;
+		this.panel = null;
+		this.rowEls.clear();
+		this.onToggle(false);
+	}
+	appendLog(line) {
+		this.logs.push(line);
+		if (this.logs.length > MAX_LOG_LINES) this.logs.splice(0, this.logs.length - MAX_LOG_LINES);
+		this.renderLogState();
+	}
+	clearLogs() {
+		this.logs.length = 0;
+		this.renderLogState();
+	}
+	destroy() {
+		this.close();
+		this.unsubscribe();
+	}
+	optionById(id) {
+		return id === void 0 ? void 0 : this.options.find((o) => o.id === id);
+	}
+	render() {
+		if (!this.panel) return;
+		this.rowEls.clear();
+		const rows = this.options.map((option, index) => {
+			const row = renderRow(option, this.tasks.get(option.id), this.now(), index);
+			this.rowEls.set(option.id, row);
+			return row;
+		});
+		this.panel.replaceChildren(renderHeader(this.info), renderBody(this.info, rows), renderFooter(this.logs.length, this.logsOpen), this.logsOpen ? renderLogs(this.logs) : "");
+	}
+	renderLogState() {
+		if (!this.panel) return;
+		const count = this.panel.querySelector(".foot .count");
+		if (count) count.textContent = this.logs.length > 0 ? ` ${this.logs.length}` : "";
+		const lines = this.panel.querySelector(".log-lines");
+		if (!lines) return;
+		const pinned = lines.scrollHeight - lines.scrollTop - lines.clientHeight < 24;
+		lines.textContent = this.logs.join("\n");
+		if (pinned) lines.scrollTop = lines.scrollHeight;
+	}
+	queueRow(id) {
+		if (!this.panel || !this.rowEls.has(id)) return;
+		this.dirtyRows.add(id);
+		if (this.frameQueued) return;
+		this.frameQueued = true;
+		schedule$1(() => {
+			this.frameQueued = false;
+			for (const dirty of this.dirtyRows) this.patchRow(dirty);
+			this.dirtyRows.clear();
+		});
+	}
+	patchRow(id) {
+		const current = this.rowEls.get(id);
+		const index = this.options.findIndex((o) => o.id === id);
+		if (!current || index < 0) return;
+		const focusedAction = (this.host?.shadowRoot?.activeElement)?.closest("[data-row]") === current;
+		const next = renderRow(this.options[index], this.tasks.get(id), this.now(), index);
+		current.replaceWith(next);
+		this.rowEls.set(id, next);
+		if (focusedAction) next.querySelector("button, a")?.focus({ preventScroll: true });
+	}
+	position() {
+		const host = this.host;
+		const anchor = this.anchor;
+		if (!host || !anchor) return;
+		computePosition(anchor, host, {
+			strategy: "fixed",
+			placement: this.placement,
+			middleware: [
+				offset(8),
+				flip({ padding: VIEWPORT_PADDING }),
+				shift({ padding: VIEWPORT_PADDING }),
+				size({
+					padding: VIEWPORT_PADDING,
+					apply: ({ availableHeight }) => {
+						if (this.panel) this.panel.style.maxHeight = `${Math.max(220, availableHeight)}px`;
+					}
+				})
+			]
+		}).then(({ x, y }) => {
+			if (this.host !== host) return;
+			host.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+			host.style.visibility = "";
+			if (this.focusOnReveal) {
+				this.focusOnReveal = false;
+				this.panel?.querySelector("[data-action=\"download\"]")?.focus({ preventScroll: true });
+			}
+		});
+	}
+	onClick = (event) => {
+		const target = event.target?.closest("[data-action]");
+		if (!target) return;
+		const action = target.dataset.action;
+		const option = this.optionById(target.dataset.id);
+		switch (action) {
+			case "close":
+				this.close();
+				this.anchor?.focus({ preventScroll: true });
+				break;
+			case "download":
+				if (option) this.tasks.start(option);
+				break;
+			case "copy":
+				if (option) this.copy(option.segments[0].url, target, "已复制直链");
+				break;
+			case "copy-logs":
+				this.copy(this.logs.join("\n"), target, "已复制日志");
+				break;
+			case "toggle-logs":
+				this.logsOpen = !this.logsOpen;
+				this.render();
+				this.panel?.querySelector("[data-action=\"toggle-logs\"]")?.focus({ preventScroll: true });
+				if (this.logsOpen) this.renderLogState();
+				break;
+		}
+	};
+	copy(text, button, done) {
+		const clipboard = navigator.clipboard;
+		if (!clipboard) {
+			this.appendLog("复制失败：当前页面无法访问剪贴板");
+			return;
+		}
+		clipboard.writeText(text).then(() => {
+			const original = [...button.childNodes];
+			const title = button.title;
+			button.classList.add("copied");
+			button.title = done;
+			button.replaceChildren(icon("check"));
+			setTimeout(() => {
+				button.classList.remove("copied");
+				button.title = title;
+				button.replaceChildren(...original);
+			}, COPIED_FEEDBACK_MS);
+		}, (err) => this.appendLog(`复制失败：${err instanceof Error ? err.message : String(err)}`));
+	}
+	onPointerDown = (event) => {
+		const path = event.composedPath();
+		if (this.host && path.includes(this.host)) return;
+		if (this.anchor && path.includes(this.anchor)) return;
+		this.close();
+	};
+	onKeyDown = (event) => {
+		if (event.key !== "Escape") return;
+		event.stopPropagation();
+		this.close();
+		this.anchor?.focus({ preventScroll: true });
+	};
+};
+//#endregion
+//#region src/lib/host.ts
+var MODULE$3 = "host";
+var DOWNLOAD_BTN_ID = "bilibili-helper-download-btn";
+var IDLE_LABEL = "下载";
+var tasks = null;
+var popup = null;
+var btnEl = null;
+var btnLabel = null;
+var placement = "bottom-start";
+var observer = null;
+var restoreQueued = false;
+var schedule = typeof requestAnimationFrame === "function" ? (cb) => requestAnimationFrame(cb) : (cb) => setTimeout(cb, 16);
+function controller() {
+	if (popup) return popup;
+	tasks = new DownloadTasks({
+		downloadStream: (segment, onProgress) => downloadStream(segment, onProgress),
+		downloadAndMerge: (segments, onProgress, onMerging) => downloadAndMerge(segments, onProgress, onMerging),
+		saveBlob,
+		revokeUrl: (url) => URL.revokeObjectURL(url),
+		now: () => Date.now(),
+		log: (line) => popup?.appendLog(line)
+	});
+	tasks.subscribe(updateButtonLabel);
+	popup = new DownloadPopup(tasks, void 0, (open) => btnEl?.setAttribute("aria-expanded", String(open)));
+	return popup;
+}
+function updateButtonLabel() {
+	if (!btnLabel || !tasks) return;
+	const { active, percent } = tasks.summary();
+	const label = active === 0 ? IDLE_LABEL : percent === null ? "处理中" : `${percent}%`;
+	if (btnLabel.textContent !== label) btnLabel.textContent = label;
+	btnEl?.toggleAttribute("data-busy", active > 0);
+}
+/** Remove the floating bottom bar left behind by older versions. */
 function cleanupOldHost() {
 	const old = document.getElementById("bilibili-helper-host");
 	if (old) {
@@ -5280,291 +7363,119 @@ function cleanupOldHost() {
 		logInfo(MODULE$3, "removed old floating host bar");
 	}
 }
-/**
-* Inject a download button into the page toolbar after the share button.
-* Creates the popup panel lazily on first click.
-*/
-function ensureButton() {
-	if (btnEl) return btnEl;
-	cleanupOldHost();
-	const shareWrap = document.querySelector(".toolbar-left-item-wrap .video-share-wrap");
-	if (!shareWrap) {
-		logWarn(MODULE$3, "share button not found, using fallback popup position");
-		btnEl = document.createElement("div");
-		btnEl.id = DOWNLOAD_BTN_ID;
-		btnEl.textContent = "下载";
-		Object.assign(btnEl.style, {
-			position: "fixed",
-			bottom: "20px",
-			right: "20px",
-			zIndex: "999999",
-			background: "#f45a8d",
-			color: "#fff",
-			padding: "10px 20px",
-			borderRadius: "6px",
-			cursor: "pointer",
-			fontSize: "14px",
-			fontWeight: "bold",
-			boxShadow: "0 2px 8px rgba(0,0,0,0.3)"
-		});
-		document.body.appendChild(btnEl);
-		btnEl.addEventListener("click", togglePopup);
-		return btnEl;
-	}
-	const shareItem = shareWrap.closest(".toolbar-left-item-wrap");
-	if (!shareItem || !shareItem.parentNode) {
-		logWarn(MODULE$3, "share item parent not found");
-		return btnEl;
-	}
-	btnEl = document.createElement("div");
-	btnEl.id = DOWNLOAD_BTN_ID;
-	btnEl.className = "toolbar-left-item-wrap";
-	btnEl.style.cssText = "display:inline-flex;align-items:center;cursor:pointer;";
-	btnEl.innerHTML = `
-		<div class="video-toolbar-left-item" style="display:flex;flex-direction:column;align-items:center;gap:2px;color:var(--text1,#18191C);font-size:12px">
-			<svg width="28" height="28" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg" class="video-toolbar-item-icon" fill="currentColor">
+function onButtonActivate(event) {
+	if (event instanceof KeyboardEvent && event.key !== "Enter" && event.key !== " ") return;
+	event.preventDefault();
+	if (btnEl) controller().toggle(btnEl, placement);
+}
+function decorate(el) {
+	el.id = DOWNLOAD_BTN_ID;
+	el.setAttribute("role", "button");
+	el.setAttribute("tabindex", "0");
+	el.setAttribute("aria-haspopup", "dialog");
+	el.setAttribute("aria-expanded", "false");
+	el.title = "下载当前视频";
+	el.addEventListener("click", onButtonActivate);
+	el.addEventListener("keydown", onButtonActivate);
+}
+function createFloatingButton() {
+	const el = document.createElement("div");
+	el.style.cssText = [
+		"position:fixed",
+		"right:24px",
+		"bottom:24px",
+		"z-index:99999",
+		"display:flex",
+		"align-items:center",
+		"gap:6px",
+		"height:40px",
+		"padding:0 16px",
+		"border-radius:20px",
+		"background:var(--brand_pink,#ff6699)",
+		"color:#fff",
+		"font-size:14px",
+		"font-weight:500",
+		"cursor:pointer",
+		"box-shadow:0 6px 16px rgba(255,102,153,.35)",
+		"user-select:none"
+	].join(";");
+	el.innerHTML = `<span style="display:block;width:18px;height:18px">${ICONS.download}</span><span data-label></span>`;
+	return el;
+}
+function createToolbarButton() {
+	const el = document.createElement("div");
+	el.className = "toolbar-left-item-wrap";
+	el.style.cssText = "display:inline-flex;align-items:center;cursor:pointer;";
+	el.innerHTML = `
+		<div class="video-toolbar-left-item" style="display:flex;align-items:center;gap:6px;color:var(--text2,#61666d);font-size:13px">
+			<svg width="28" height="28" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg" class="video-toolbar-item-icon" fill="currentColor" aria-hidden="true">
 				<path d="M23 17v5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-5h2v5h14v-5h2z"/>
 				<path d="M14 4a1 1 0 0 1 1 1v9.586l3.293-3.293a1 1 0 0 1 1.414 1.414l-5 5a1 1 0 0 1-1.414 0l-5-5a1 1 0 0 1 1.414-1.414L13 14.586V5a1 1 0 0 1 1-1z"/>
 			</svg>
-			<span>下载</span>
+			<span data-label style="font-variant-numeric:tabular-nums"></span>
 		</div>
 	`;
-	btnEl.addEventListener("click", togglePopup);
-	shareItem.parentNode.insertBefore(btnEl, shareItem.nextSibling);
-	logInfo(MODULE$3, "download button injected after share button");
-	return btnEl;
+	return el;
 }
-function togglePopup() {
-	if (popupEl) {
-		popupEl.remove();
-		popupEl = null;
-		return;
-	}
-	showPopup();
+function findShareItem() {
+	return document.querySelector(".toolbar-left-item-wrap .video-share-wrap")?.closest(".toolbar-left-item-wrap") ?? null;
 }
-function showPopup() {
-	if (popupEl) {
-		popupEl.remove();
-		popupEl = null;
-	}
-	if (!cachedInfo) {
-		logInfo(MODULE$3, "no download info yet, cannot show popup");
-		return;
-	}
-	popupEl = document.createElement("div");
-	popupEl.id = "bilibili-helper-popup";
-	Object.assign(popupEl.style, {
-		position: "fixed",
-		zIndex: "999999",
-		bottom: "20px",
-		right: "20px",
-		width: "420px",
-		maxHeight: "70vh",
-		overflowY: "auto",
-		background: "#fff",
-		border: "1px solid #e3e5e7",
-		borderRadius: "8px",
-		boxShadow: "0 4px 20px rgba(0,0,0,0.15)",
-		padding: "16px 20px",
-		fontSize: "13px",
-		color: "#18191C",
-		lineHeight: "1.5"
-	});
-	const info = cachedInfo;
-	const title = info.title || "Untitled";
-	const qual = info.quality ? `[${info.quality}]` : "";
-	popupEl.innerHTML = `
-		<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-			<strong>${qual} ${escapeHtml(title)}</strong>
-			<button id="bilibili-helper-popup-close" style="border:none;background:none;cursor:pointer;font-size:18px;color:#999;padding:0 4px">&times;</button>
-		</div>
-		<div id="bilibili-helper-popup-links" style="margin-bottom:8px">
-			${linksHtml(info)}
-		</div>
-		<div style="border-top:1px solid #f1f2f3;padding-top:8px;margin-top:4px;font-size:12px;color:#9499A0">
-			<label style="margin-right:12px"><input type="radio" name="helper-dl-mode" value="advanced" ${isAdvancedMode() ? "checked" : ""}> Advanced</label>
-			<label style="margin-right:12px"><input type="radio" name="helper-dl-mode" value="normal" ${!isAdvancedMode() ? "checked" : ""}> Normal</label>
-			<label id="helper-merge-label" style="margin-right:12px;${!isDash(info) ? "display:none" : ""}">
-				<input type="checkbox" id="helper-merge-cb" ${isMergeMode() ? "checked" : ""}> Merge
-			</label>
-		</div>
-		<div id="bilibili-helper-popup-logs" style="margin-top:8px;background:#2d2d2d;color:#9ab45a;border-radius:4px;padding:8px;font-size:11px;max-height:200px;overflow-y:auto;word-break:break-all"></div>
-	`;
-	document.body.appendChild(popupEl);
-	popupEl.querySelector("#bilibili-helper-popup-close").addEventListener("click", () => {
-		popupEl?.remove();
-		popupEl = null;
-	});
-	popupEl.querySelectorAll("input[name=\"helper-dl-mode\"]").forEach((el) => {
-		el.addEventListener("change", () => {
-			const val = el.value;
-			localStorage.bilibili_helper_download_mode = val;
-			rebuildPopupLinks();
-		});
-	});
-	const mergeCb = popupEl.querySelector("#helper-merge-cb");
-	if (mergeCb) mergeCb.addEventListener("change", () => {
-		localStorage.bilibili_helper_merge_mode = mergeCb.checked ? "on" : "off";
-		rebuildPopupLinks();
-	});
-	popupEl.querySelector("#bilibili-helper-popup-links").addEventListener("click", (e) => {
-		const target = e.target;
-		if (target.tagName.toLowerCase() !== "a") return;
-		const anchor = target;
-		if (anchor.classList.contains("disabled")) return;
-		if (anchor.getAttribute("mode") !== "advanced") {
-			const title = anchor.getAttribute("title") ?? "download";
-			const logsEl = popupEl?.querySelector("#bilibili-helper-popup-logs") ?? null;
-			e.preventDefault();
-			e.stopPropagation();
-			const seg = {
-				url: anchor.getAttribute("href") ?? "",
-				backups: [],
-				size: anchor.parentElement?.querySelector(".size")?.textContent ? parseSize(anchor.parentElement.querySelector(".size").textContent) : void 0
-			};
-			if (seg.url) {
-				appendLog(logsEl, `downloading ${title}...`);
-				runSingle(anchor, seg, title, logsEl).catch((err) => {
-					appendLog(logsEl, `download failed: ${err}`);
-				});
-			}
-			return;
-		}
-		e.preventDefault();
-		e.stopPropagation();
-		const filename = anchor.getAttribute("title") ?? "download";
-		const logsEl = popupEl?.querySelector("#bilibili-helper-popup-logs") ?? null;
-		if (anchor.getAttribute("merge") === "on") {
-			const durlsAttr = anchor.getAttribute("durls");
-			if (!durlsAttr) return;
-			const segments = JSON.parse(decodeURIComponent(durlsAttr));
-			appendLog(logsEl, `merging ${filename}...`);
-			runMerge(anchor, segments, filename, logsEl).catch((err) => {
-				appendLog(logsEl, `merge failed: ${err}`);
-			});
-		} else {
-			const durlAttr = anchor.getAttribute("durl");
-			if (!durlAttr) return;
-			const segments = JSON.parse(decodeURIComponent(durlAttr));
-			appendLog(logsEl, `downloading ${filename}...`);
-			runSingle(anchor, segments[0], filename, logsEl).catch((err) => {
-				appendLog(logsEl, `download failed: ${err}`);
-			});
-		}
-	});
+/** The button was dropped by a re-render, or is floating while a toolbar now exists. */
+function buttonNeedsRestore() {
+	if (!btnEl) return false;
+	if (!btnEl.isConnected) return true;
+	return placement === "top-end" && findShareItem() !== null;
 }
-function isDash(info) {
-	return !!info.dash;
-}
-/** Convert a LinkSegment (primary + backups) to the downloader's SegmentDescriptor. */
-function toDescriptor(seg) {
-	return {
-		url: seg.url,
-		backups: seg.backups,
-		size: seg.size
-	};
-}
-/** Run a single-segment download with progress, then trigger the browser save. */
-async function runSingle(anchor, seg, filename, logsEl) {
-	anchor.classList.add("disabled");
-	const progressEl = anchor.parentElement?.querySelector(".progress");
-	try {
-		const blob = await downloadStream(toDescriptor(seg), (received, total) => {
-			const pct = total > 0 ? Math.round(received / total * 100) : 0;
-			progressEl?.replaceChildren(document.createTextNode(` downloading ${pct}%`));
-		});
-		const ext = extensionForUrl(seg.url);
-		progressEl?.replaceChildren(document.createTextNode(" download complete"));
-		appendLog(logsEl, `downloaded ${filename}${ext}`);
-		downloadBlob(new Uint8Array(await blob.arrayBuffer()), filename + ext, logsEl);
-	} finally {
-		anchor.classList.remove("disabled");
-	}
-}
-/** Run a parallel audio+video download + FFmpeg merge. */
-async function runMerge(anchor, segments, filename, logsEl) {
-	anchor.classList.add("disabled");
-	const progressEl = anchor.parentElement?.querySelector(".progress");
-	const audioEl = document.createElement("li");
-	const videoEl = document.createElement("li");
-	if (progressEl) progressEl.append(audioEl, videoEl);
-	const fmt = (which) => {
-		audioEl.replaceChildren(document.createTextNode("audio downloading"));
-		videoEl.replaceChildren(document.createTextNode("video downloading"));
-	};
-	fmt("audio");
-	try {
-		const { data, cleanup } = await downloadAndMerge({
-			audio: toDescriptor(segments[0]),
-			video: toDescriptor(segments[1])
-		}, (which, received, total) => {
-			const pct = total > 0 ? Math.round(received / total * 100) : 0;
-			(which === "audio" ? audioEl : videoEl).replaceChildren(document.createTextNode(`${which} downloading ${pct}%`));
-		});
-		progressEl?.replaceChildren(document.createTextNode("done"));
-		appendLog(logsEl, `merged ${filename}.mp4`);
-		downloadBlob(new Uint8Array(data), `${filename}.mp4`, logsEl, cleanup);
-	} finally {
-		anchor.classList.remove("disabled");
-	}
-}
-function rebuildPopupLinks() {
-	const linksEl = popupEl?.querySelector("#bilibili-helper-popup-links");
-	if (!linksEl || !cachedInfo) return;
-	linksEl.innerHTML = linksHtml(cachedInfo);
-	const mergeLabel = popupEl?.querySelector("#helper-merge-label");
-	if (mergeLabel) mergeLabel.style.display = isDash(cachedInfo) ? "" : "none";
-}
-function appendLog(el, msg) {
-	if (!el) return;
-	el.innerHTML += `<div>${escapeHtml(msg)}</div>`;
-	el.scrollTop = el.scrollHeight;
-}
-function escapeHtml(s) {
-	return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-/** Parse a human-readable size string like '12.34MB' or '5.67GB' back to bytes. */
-function parseSize(text) {
-	if (!text) return void 0;
-	const m = text.trim().match(/^([\d.]+)\s*(B|KB|MB|GB)$/i);
-	if (!m) return void 0;
-	const num = parseFloat(m[1]);
-	switch (m[2].toUpperCase()) {
-		case "GB": return num * 1024 * 1024 * 1024;
-		case "MB": return num * 1024 * 1024;
-		case "KB": return num * 1024;
-		default: return num;
-	}
-}
-function linksHtml(info) {
-	if (info.code !== ErrorCode.OK) return `<div style="color:#f85a54">${escapeHtml(info.message || "Unknown error")}</div>`;
-	const isDash = !!info.dash;
-	const segments = [];
-	if (isDash && info.dash) segments.push(streamToLinkSegment(info.dash.audio), streamToLinkSegment(info.dash.video));
-	else if (info.durl) for (const seg of info.durl) segments.push({
-		url: seg.url,
-		backups: seg.backup_url,
-		size: seg.size
-	});
-	const opts = {
-		filename: info.title ?? "",
-		segments,
-		isDash
-	};
-	if (!isAdvancedMode()) return createNormalDownloadLink(opts);
-	if (!isMergeMode() || !isDash) return createAdvancedNoMergeLinks(opts);
-	return createMergeLink(opts);
-}
-/** Map a DashStream to a LinkSegment, pulling primary + backup URLs. */
-function streamToLinkSegment(stream) {
-	return {
-		url: stream.base_url ?? stream.baseUrl ?? "",
-		backups: (stream.backup_url ?? stream.backupUrl ?? []).filter(Boolean),
-		size: stream.size
-	};
+function restoreButton() {
+	restoreQueued = false;
+	if (!buttonNeedsRestore()) return;
+	logInfo(MODULE$3, "download button missing or misplaced, restoring");
+	ensureButton();
 }
 /**
-* Show or update the download info. If the button doesn't exist yet, inject it.
+* Bilibili's SPA can re-render the toolbar without a URL or quality change,
+* so the button is restored on DOM changes rather than on new video data.
+*/
+function watchButton() {
+	if (observer || typeof MutationObserver !== "function") return;
+	observer = new MutationObserver(() => {
+		if (restoreQueued || !buttonNeedsRestore()) return;
+		restoreQueued = true;
+		schedule(restoreButton);
+	});
+	observer.observe(document.body, {
+		childList: true,
+		subtree: true
+	});
+}
+/** Inject the download button, or move it back into a re-rendered toolbar. */
+function ensureButton() {
+	if (btnEl && !buttonNeedsRestore()) return btnEl;
+	btnEl?.remove();
+	cleanupOldHost();
+	const shareItem = findShareItem();
+	if (shareItem?.parentNode) {
+		btnEl = createToolbarButton();
+		placement = "bottom-start";
+		shareItem.parentNode.insertBefore(btnEl, shareItem.nextSibling);
+		logInfo(MODULE$3, "download button injected after share button");
+	} else {
+		logWarn(MODULE$3, "share button not found, using floating download button");
+		btnEl = createFloatingButton();
+		placement = "top-end";
+		document.body.appendChild(btnEl);
+	}
+	btnLabel = btnEl.querySelector("[data-label]");
+	decorate(btnEl);
+	const popupController = controller();
+	updateButtonLabel();
+	if (popupController.isOpen()) popupController.open(btnEl, placement);
+	watchButton();
+	return btnEl;
+}
+/**
+* Show or update the download info. `loading` clears the current info so an
+* open popup shows its loading state until the real data arrives.
 */
 function showDownloadInfo(info, loading = false) {
 	logInfo(MODULE$3, "showDownloadInfo", {
@@ -5575,25 +7486,13 @@ function showDownloadInfo(info, loading = false) {
 		hasDurl: !!info.durl,
 		loading
 	});
-	if (loading) {
-		cachedInfo = null;
-		return;
-	}
-	cachedInfo = info;
-	ensureButton();
-	if (popupEl) rebuildPopupLinks();
+	controller().setInfo(loading ? null : info);
+	if (!loading) ensureButton();
 }
-/**
-* Append a log message to the console (and popup if open).
-*/
+/** Log to the console and to the popup's log panel. */
 function log(...args) {
 	console.log("[bilibili downloader]", "[host]", ...args);
-	const logsEl = popupEl?.querySelector("#bilibili-helper-popup-logs");
-	if (logsEl) {
-		const line = args.map((a) => typeof a === "object" ? safeJson(a) : String(a)).join(" ");
-		logsEl.innerHTML += `<div>${escapeHtml(line)}</div>`;
-		logsEl.scrollTop = logsEl.scrollHeight;
-	}
+	controller().appendLog(args.map((a) => typeof a === "object" ? safeJson(a) : String(a)).join(" "));
 }
 function safeJson(a) {
 	try {
@@ -5602,13 +7501,9 @@ function safeJson(a) {
 		return String(a);
 	}
 }
-/**
-* Clear log panel.
-*/
 function clearLogs() {
 	logInfo(MODULE$3, "logs cleared");
-	const logsEl = popupEl?.querySelector("#bilibili-helper-popup-logs");
-	if (logsEl) logsEl.innerHTML = "";
+	popup?.clearLogs();
 }
 //#endregion
 //#region __vite-browser-external

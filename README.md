@@ -60,6 +60,7 @@ To publish a release, bump the `version` in `static/manifest.json` and push the 
 Before the first release, add these repository Actions secrets:
 
 - `VITE_SENTRY_DSN`
+- `SENTRY_AUTH_TOKEN`
 - `CHROME_WEB_STORE_EXTENSION_ID`
 - `CHROME_WEB_STORE_PUBLISHER_ID`
 - `CHROME_WEB_STORE_CLIENT_ID`
@@ -67,6 +68,10 @@ Before the first release, add these repository Actions secrets:
 - `CHROME_WEB_STORE_REFRESH_TOKEN`
 
 The workflow fails before building if any required secret is missing. The GitHub Release uses the workflow's built-in `GITHUB_TOKEN`.
+
+### Sentry source maps
+
+Builds upload source maps with Debug IDs to the `ashley-jackson/bilibili-extension` Sentry project when `SENTRY_AUTH_TOKEN` is set. The publish workflow uses the `SENTRY_AUTH_TOKEN` repository secret. Builds without the token skip source-map generation and upload. After upload, generated maps are deleted so they are not included in the extension package.
 
 ## Testing
 

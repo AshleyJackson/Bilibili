@@ -7,8 +7,7 @@
  *   - downloadDurlSegments: fetch a sequence of DURL segments and concatenate.
  *
  * Progress is reported via callbacks so the UI layer can render it however it
- * likes. This module never touches the DOM directly except through the
- * `downloadBlob` helper it's given.
+ * likes. This module never touches the DOM.
  */
 
 import { fetchSegment, collectUrls } from './stream-fetch';
@@ -80,7 +79,8 @@ export async function downloadStream(
  */
 export async function downloadAndMerge(
 	segments: { audio: SegmentDescriptor; video: SegmentDescriptor },
-	onProgress?: (which: 'audio' | 'video', received: number, total: number) => void
+	onProgress?: (which: 'audio' | 'video', received: number, total: number) => void,
+	onMerging?: () => void
 ): Promise<{ data: ArrayBuffer; cleanup: () => void }> {
 	logInfo(MODULE, 'downloadAndMerge start', {
 		audioUrl: segments.audio.url.slice(0, 80),
@@ -100,6 +100,7 @@ export async function downloadAndMerge(
 		audioSize: audioBlob.size,
 		videoSize: videoBlob.size
 	});
+	onMerging?.();
 
 	const { baseUrl } = getInternals();
 	const [data, cleanup] = await mergeAudioVideo(baseUrl, audioBlob, videoBlob);
