@@ -72,6 +72,31 @@ describe('Sentry message validation and forwarding', () => {
 		expect(dispatchEvent).not.toHaveBeenCalled();
 	});
 
+	it('does not report the expected unsupported Bilibili stream URL validation error', () => {
+		const dispatchEvent = vi.fn();
+		vi.stubGlobal('window', { dispatchEvent });
+
+		dispatchContentScriptError(new Error('Unsupported Bilibili stream URL'), 'stream');
+		dispatchContentScriptError('Unsupported Bilibili stream URL', 'stream');
+
+		expect(dispatchEvent).not.toHaveBeenCalled();
+	});
+
+	it('still reports errors that only mention an unsupported Bilibili stream URL', () => {
+		const dispatchEvent = vi.fn();
+		vi.stubGlobal('window', { dispatchEvent });
+
+		dispatchContentScriptError(
+			new Error('Unsupported Bilibili stream URL: https://example.com/video.m4s'),
+			'stream'
+		);
+
+		expect(dispatchEvent).toHaveBeenCalledOnce();
+		expect(dispatchEvent.mock.calls[0][0].detail.error.message).toBe(
+			'Unsupported Bilibili stream URL: https://example.com/video.m4s'
+		);
+	});
+
 	it('forwards only valid reports to the extension service worker', async () => {
 		const sendMessage = vi.fn(() => Promise.resolve({ sent: true }));
 		vi.stubGlobal('chrome', {
