@@ -5,6 +5,7 @@ import {
 	sanitizeSentryEvent,
 	SENTRY_ERROR_MESSAGE_TYPE
 } from '$lib/sentry-reporting';
+import { attachStreamDownloadPort } from './stream-download';
 
 const dsn = import.meta.env.VITE_SENTRY_DSN;
 const allowReport = createSentryReportRateLimiter();
@@ -61,4 +62,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 		.catch(() => sendResponse({ sent: false }));
 
 	return true;
+});
+
+chrome.runtime.onConnect.addListener((port) => {
+	attachStreamDownloadPort(port, chrome.runtime.id);
 });

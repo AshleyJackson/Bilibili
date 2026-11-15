@@ -12,8 +12,8 @@
  *     doesn't 403 the request.
  */
 
-import { STREAM_FETCH_DEFAULTS } from '../constants';
 import { logInfo, logWarn, logError } from '../logger';
+import { fetchStreamThroughExtension } from '../stream-download-client';
 
 const MODULE = 'stream';
 
@@ -40,17 +40,13 @@ export interface FetchSegmentResult {
  * fallbacks (fetchSegment does that). Throws when all retries are
  * exhausted.
  */
-async function fetchOne(
-	url: string,
-	onProgress?: ProgressFn,
-	signal?: AbortSignal,
-	maxRetries = 2
-): Promise<Blob> {
+async function fetchOne(url: string, onProgress?: ProgressFn, signal?: AbortSignal, maxRetries = 2): Promise<Blob> {
 	for (let attempt = 0; ; attempt++) {
 		let response: Response;
 		try {
-			response = await fetch(url, { ...STREAM_FETCH_DEFAULTS, signal });
+			response = await fetchStreamThroughExtension(url, signal);
 		} catch (err) {
+			if (signal?.aborted) throw err;
 			// Network error (DNS / TCP / TLS failure) — retry with backoff.
 			if (attempt < maxRetries) {
 				const delay = Math.min(1000 * Math.pow(2, attempt), 10_000);
@@ -110,6 +106,7 @@ async function fetchOne(
 				error: (err as Error).message
 			});
 			await reader.cancel().catch(() => {});
+			if (signal?.aborted) throw err;
 			if (attempt < maxRetries) {
 				continue;
 			}
@@ -152,6 +149,7 @@ export async function fetchSegment(
 		} catch (err) {
 			lastErr = err;
 			logError(MODULE, `fetch failed for URL ${i}`, { url: url.slice(0, 80) }, err);
+			if (signal?.aborted) throw err;
 		}
 	}
 	throw new Error(`all segment URLs failed; last error: ${(lastErr as Error)?.message ?? lastErr}`);
