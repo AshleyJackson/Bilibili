@@ -11,10 +11,10 @@
  * `downloadBlob` helper it's given.
  */
 
-import { fetchSegment, collectUrls, type ProgressFn } from './stream-fetch';
+import { fetchSegment, collectUrls } from './stream-fetch';
 import { mergeAudioVideo } from '../ffmpeg';
 import { getInternals } from '../utils';
-import { logInfo, logError } from '../logger';
+import { logInfo } from '../logger';
 
 const MODULE = 'dl-orch';
 

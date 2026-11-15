@@ -1,0 +1,11 @@
+.env*
+.git/
+.svelte-kit/
+build/
+coverage/
+node_modules/
+static/assets/
+static/bilibili-helper-content-script*.js
+static/bilibili-helper-service-worker.js
+static/ffmpeg-core.*
+static/ffmpeg.worker.js

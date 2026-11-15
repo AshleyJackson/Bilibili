@@ -1,5 +1,4 @@
-import { z } from 'zod';
-import { logInfo, logWarn, logError } from './logger';
+import { logInfo, logWarn } from './logger';
 
 const MODULE = 'btypes';
 
@@ -11,52 +10,6 @@ export interface ApiResult<T = unknown> {
 	data?: T;
 	message?: string;
 }
-
-/**
- * Zod schemas for the __INITIAL_STATE__ data embedded in Bilibili pages.
- */
-
-const SeasonEpisodeSchema = z.object({
-	ep_id: z.number(),
-	title: z.string().optional(),
-	titleFormat: z.string().optional(),
-	long_title: z.string().optional(),
-	share_copy: z.string().optional()
-});
-
-const SeasonInfoSchema = z.object({
-	mediaInfo: z.object({
-		title: z.string(),
-		episodes: z.array(SeasonEpisodeSchema)
-	})
-});
-
-const NextDataEpisodeSchema = z.object({
-	episode_id: z.number(),
-	index_title: z.string(),
-	long_title: z.string()
-});
-
-const NextSupplementSchema = z.object({
-	supplement: z.object({
-		ogv_episode_info: NextDataEpisodeSchema
-	})
-});
-
-const VideoInfoResultSchema = z.object({
-	result: z.object({
-		video_info: z.object({
-			dash: z.any().optional(),
-			durl: z.any().optional(),
-			avid: z.number().optional(),
-			cid: z.number().optional()
-		}),
-		arc: z.object({
-			aid: z.number(),
-			cid: z.number()
-		})
-	})
-});
 
 /**
  * Page type detection

@@ -4494,8 +4494,10 @@ function createSentryErrorMessage(error, source, module) {
 		error: serializeSentryError(error)
 	};
 }
+var UBLOCK_PREVENT_FETCH_FRAME = /chrome-extension:\/\/[^/\s]+\/rulesets\/scripting\/scriptlet\/ublock-filters\.prevent-fetch\.js/i;
 function dispatchContentScriptError(error, module) {
 	if (typeof window === "undefined") return;
+	if (error instanceof Error && UBLOCK_PREVENT_FETCH_FRAME.test(error.stack ?? "")) return;
 	const message = createSentryErrorMessage(error, "content-script", module);
 	window.dispatchEvent(new CustomEvent(CONTENT_SCRIPT_ERROR_EVENT, { detail: message }));
 }
@@ -5075,6 +5077,13 @@ function extensionForUrl(url) {
 }
 //#endregion
 //#region src/lib/host.ts
+/**
+* Host UI for the Bilibili download helper.
+*
+* Injects a download button into the Bilibili page toolbar (next to the share button)
+* instead of the old floating bottom bar. A small popup panel shows download links
+* on click.
+*/
 var MODULE$3 = "host";
 var cachedInfo = null;
 var popupEl = null;
@@ -6448,39 +6457,6 @@ async function signWbi(params) {
 	});
 	return signed;
 }
-//#endregion
-//#region src/lib/bilibili-types.ts
-/**
-* Zod schemas for the __INITIAL_STATE__ data embedded in Bilibili pages.
-*/
-var SeasonEpisodeSchema = object({
-	ep_id: number(),
-	title: string().optional(),
-	titleFormat: string().optional(),
-	long_title: string().optional(),
-	share_copy: string().optional()
-});
-object({ mediaInfo: object({
-	title: string(),
-	episodes: array(SeasonEpisodeSchema)
-}) });
-object({ supplement: object({ ogv_episode_info: object({
-	episode_id: number(),
-	index_title: string(),
-	long_title: string()
-}) }) });
-object({ result: object({
-	video_info: object({
-		dash: any().optional(),
-		durl: any().optional(),
-		avid: number().optional(),
-		cid: number().optional()
-	}),
-	arc: object({
-		aid: number(),
-		cid: number()
-	})
-}) });
 //#endregion
 //#region src/lib/bilibili-api.ts
 var MODULE$1 = "api";

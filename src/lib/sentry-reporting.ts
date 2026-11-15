@@ -199,8 +199,12 @@ export function forwardContentScriptErrorMessage(value: unknown): Promise<boolea
 	return Promise.resolve(false);
 }
 
+const UBLOCK_PREVENT_FETCH_FRAME =
+	/chrome-extension:\/\/[^/\s]+\/rulesets\/scripting\/scriptlet\/ublock-filters\.prevent-fetch\.js/i;
+
 export function dispatchContentScriptError(error: unknown, module?: string): void {
 	if (typeof window === 'undefined') return;
+	if (error instanceof Error && UBLOCK_PREVENT_FETCH_FRAME.test(error.stack ?? '')) return;
 
 	const message = createSentryErrorMessage(error, 'content-script', module);
 	window.dispatchEvent(new CustomEvent(CONTENT_SCRIPT_ERROR_EVENT, { detail: message }));

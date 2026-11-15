@@ -1,6 +1,6 @@
 import { md5 } from 'js-md5';
 import { NAV_API, FETCH_DEFAULTS } from './constants';
-import { logInfo, logWarn, logError } from './logger';
+import { logInfo, logWarn } from './logger';
 
 const MODULE = 'wbi';
 
@@ -17,7 +17,6 @@ export const MIXIN_KEY_ENC_TAB = [
 	56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52
 ];
 
-const FILTER_CHARS = "!'()*";
 const KEY_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 let cachedKeys: { imgKey: string; subKey: string; fetchedAt: number } | null = null;

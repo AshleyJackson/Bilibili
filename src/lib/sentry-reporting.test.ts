@@ -59,6 +59,19 @@ describe('Sentry message validation and forwarding', () => {
 		expect(dispatchEvent.mock.calls[0][0].detail.error.message).toBe('download failed');
 	});
 
+	it('does not report fetch errors blocked by uBlock Origin', () => {
+		const dispatchEvent = vi.fn();
+		vi.stubGlobal('window', { dispatchEvent });
+		const error = new TypeError('Failed to fetch');
+		const ublockFrame =
+			'chrome-extension://dgjbaljgolmlcmmklmmeafecikidmjpi/rulesets/scripting/scriptlet/ublock-filters.prevent-fetch.js';
+		error.stack = `${error.stack}\n    at Object.apply (${ublockFrame}:147:33)`;
+
+		dispatchContentScriptError(error, 'stream');
+
+		expect(dispatchEvent).not.toHaveBeenCalled();
+	});
+
 	it('forwards only valid reports to the extension service worker', async () => {
 		const sendMessage = vi.fn(() => Promise.resolve({ sent: true }));
 		vi.stubGlobal('chrome', {

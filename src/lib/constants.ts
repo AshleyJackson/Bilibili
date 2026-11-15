@@ -1,5 +1,3 @@
-import { z } from 'zod';
-
 // ── Quality labels ──
 export const QUALITY_LABELS: Record<number, string> = {
 	16: '360P 流畅',
