@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { downloadStream, streamToSegment, downloadDurlSegments, extensionForUrl } from './orchestration';
+import { downloadStream, streamToSegment, downloadDurlSegments, extensionForUrl, downloadAndMerge } from './orchestration';
+import { mergeAudioVideo } from '../ffmpeg';
 import { fetchStreamThroughExtension } from '../stream-download-client';
 
 // Silence the logger
@@ -140,6 +141,47 @@ describe('downloadDurlSegments', () => {
 		const blob = await downloadDurlSegments([{ url: 'https://cdn/a.mp4' }, { url: 'https://cdn/b.mp4' }]);
 		const buf = new Uint8Array(await blob.arrayBuffer());
 		expect(Array.from(buf)).toEqual([1, 2, 3]);
+	});
+});
+
+describe('downloadAndMerge', () => {
+	it('signals the merge phase after both streams finish and before FFmpeg runs', async () => {
+		const order: string[] = [];
+		extensionFetchMock.mockImplementation(
+			vi.fn(async (url: string) => {
+				const body = new Uint8Array([url.includes('audio') ? 1 : 2]);
+				const stream = new ReadableStream<Uint8Array>({
+					start(c) {
+						c.enqueue(body);
+						c.close();
+					}
+				});
+				order.push(`fetch:${url.includes('audio') ? 'audio' : 'video'}`);
+				return { ok: true, status: 200, headers: new Headers({ 'content-length': '1' }), body: stream } as Response;
+			})
+		);
+		vi.mocked(mergeAudioVideo).mockImplementationOnce(async () => {
+			order.push('merge');
+			return [new ArrayBuffer(4), () => {}];
+		});
+		const el = document.createElement('div');
+		el.id = 'bilibili-helper-ext-content-script';
+		el.dataset.internals = JSON.stringify({ manifest: {}, baseUrl: 'chrome-extension://id' });
+		document.body.appendChild(el);
+		URL.createObjectURL = vi.fn(() => 'blob:x');
+		const progress = vi.fn();
+
+		const result = await downloadAndMerge(
+			{ audio: { url: 'https://cdn/audio.m4s' }, video: { url: 'https://cdn/video.m4s' } },
+			progress,
+			() => order.push('merging')
+		);
+
+		expect(order.slice(-2)).toEqual(['merging', 'merge']);
+		expect(progress).toHaveBeenCalledWith('audio', 1, 1);
+		expect(progress).toHaveBeenCalledWith('video', 1, 1);
+		expect(result.data.byteLength).toBe(4);
+		el.remove();
 	});
 });
 

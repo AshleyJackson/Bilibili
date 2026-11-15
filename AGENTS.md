@@ -17,9 +17,10 @@ This is a **SvelteKit Chrome Extension** that downloads videos from bilibili.com
 | `src/content-script/main.ts` | Page-world logic: XHR interception, `__INITIAL_STATE__`/`__PLAYURL_HYDRATE_DATA__` parsing, playurl fetch, UI render |
 | `src/lib/wbi.ts` | WBI parameter signing (mixin key + `w_rid`/`wts`) required by `/x/player/wbi/playurl` |
 | `src/lib/bilibili-api.ts` | UGC (`fetchUgcPlayUrl`, WBI-signed) and bangumi (`fetchBangumiPlayUrl`, PGC v2) playurl clients |
-| `src/lib/download.ts` | Normal + advanced (merge) download flows |
+| `src/lib/download.ts` | Download options model: turns playurl data into merged / video-only / audio-only / DURL options |
 | `src/lib/ffmpeg.ts` | WASM FFmpeg audio/video merge |
-| `src/lib/host.ts` | Shadow-DOM helper UI |
+| `src/lib/host.ts` | Toolbar "下载" button injection + public UI API (`showDownloadInfo`, `log`, `clearLogs`, `cleanup`) |
+| `src/lib/popup/` | Download popup: `tasks.ts` (per-option download state), `view.ts` (DOM builders), `styles.ts`, `icons.ts`, `popup.ts` (shadow-DOM controller anchored with `@floating-ui/dom`) |
 | `src/lib/schemas.ts` | Zod schemas (DashData, DurlSegment, DashStream, ErrorCode, etc.) |
 | `src/lib/constants.ts` | API endpoints, quality labels, fetch defaults |
 | `static/` | Static assets (icons, `manifest.json`, built content scripts) |
@@ -95,4 +96,5 @@ Combine with vitest for integration checks — the agent-browser process can be 
 - **WBI signing is required** for the UGC `/x/player/wbi/playurl` endpoint. Use `signWbi(params)` from `src/lib/wbi.ts` before fetching. Keys are fetched from the nav API and cached (~1h TTL); on a risk-control error (`-509`/`-403`/`-352`), `fetchUgcPlayUrl` clears the cache and retries once. Bangumi (`/pgc/player/web/v2/playurl`) does **not** use WBI signing.
 - **Bilibili CDN downloads need a Referer header.** `STREAM_FETCH_DEFAULTS` in `src/lib/constants.ts` pins `referrer: 'https://www.bilibili.com/'` + `referrerPolicy: 'unsafe-url'` so `*.bilivideo.com` stream fetches don't get 403'd. Use it for any new CDN fetch.
 - Keep `PlayUrlResult` (in `bilibili-api.ts`) as the shared return shape — `host.ts` and `download.ts` consume it and should not need changes when you extend the API clients.
+- The download popup renders inside a shadow root and styles itself with Bilibili's CSS variables (`--bg1`, `--text1`, `--brand_pink`, ...), so it follows the site's light/dark theme. Build popup DOM with the `h()` helper in `popup/view.ts` (no `innerHTML` with page data).
 - When type-checking content scripts, use `bunx tsc --noEmit -p tsconfig.content.json` (the root tsconfig relies on SvelteKit's generated `.svelte-kit/tsconfig.json`).

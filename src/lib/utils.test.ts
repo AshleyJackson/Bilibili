@@ -1,28 +1,18 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-	downloadBlob,
 	fileToUint8Array,
 	formatSize,
 	getInternals,
-	isAdvancedMode,
 	isBangumiPage,
 	isBilibili,
 	isEdge,
 	isHidden,
-	isMergeMode,
 	isVideoPage,
+	saveBlob,
 	waitForElement
 } from './utils';
-import {
-	CONTENT_SCRIPT_ELEMENT_ID,
-	GB,
-	KB,
-	MB,
-	SETTING_DOWNLOAD_MODE,
-	SETTING_MERGE_MODE,
-	SETTING_SHOW
-} from './constants';
+import { CONTENT_SCRIPT_ELEMENT_ID, GB, KB, MB, SETTING_SHOW } from './constants';
 
 describe('formatSize', () => {
 	it('formats bytes at each size threshold', () => {
@@ -75,17 +65,11 @@ describe('page and browser detection', () => {
 describe('download settings', () => {
 	afterEach(() => localStorage.clear());
 
-	it('uses advanced and merge modes by default unless explicitly disabled', () => {
+	it('is visible by default unless explicitly hidden', () => {
 		localStorage.clear();
-		expect(isAdvancedMode()).toBe(true);
-		expect(isMergeMode()).toBe(true);
 		expect(isHidden()).toBe(false);
 
-		localStorage.setItem(SETTING_DOWNLOAD_MODE, 'normal');
-		localStorage.setItem(SETTING_MERGE_MODE, 'off');
 		localStorage.setItem(SETTING_SHOW, 'hide');
-		expect(isAdvancedMode()).toBe(false);
-		expect(isMergeMode()).toBe(false);
 		expect(isHidden()).toBe(true);
 	});
 });
@@ -137,23 +121,24 @@ describe('file and blob utilities', () => {
 		expect(Array.from(bytes)).toEqual([1, 2, 255]);
 	});
 
-	it('creates a downloadable anchor and invokes the completion callback', () => {
+	it('saves a blob through a download anchor and returns its object URL', () => {
 		const originalUrl = URL;
 		const createObjectURL = vi.fn(() => 'blob:download');
 		const mockUrl = class extends originalUrl {};
 		Object.defineProperty(mockUrl, 'createObjectURL', { value: createObjectURL });
 		vi.stubGlobal('URL', mockUrl);
-		const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-		const container = document.createElement('div');
-		const onDone = vi.fn();
+		let clicked: HTMLAnchorElement | null = null;
+		vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+			clicked = this;
+		});
+		const blob = new Blob([new Uint8Array([1, 2])]);
 
-		downloadBlob(new Uint8Array([1, 2]), 'clip.mp4', container, onDone);
+		const url = saveBlob(blob, 'clip.mp4');
 
-		const anchor = container.querySelector('a')!;
-		expect(createObjectURL).toHaveBeenCalledOnce();
-		expect(anchor.getAttribute('href')).toBe('blob:download');
-		expect(anchor.download).toBe('clip.mp4');
-		expect(click).toHaveBeenCalledOnce();
-		expect(onDone).toHaveBeenCalledOnce();
+		expect(url).toBe('blob:download');
+		expect(createObjectURL).toHaveBeenCalledWith(blob);
+		expect(clicked!.getAttribute('href')).toBe('blob:download');
+		expect(clicked!.download).toBe('clip.mp4');
+		expect(clicked!.isConnected).toBe(false);
 	});
 });

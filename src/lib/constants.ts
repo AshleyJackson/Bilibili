@@ -26,8 +26,6 @@ export const NAV_API = 'https://api.bilibili.com/x/web-interface/nav';
 export const PLAY_URL_API = UGC_PLAY_URL_API;
 
 // ── Settings keys ──
-export const SETTING_DOWNLOAD_MODE = 'bilibili_helper_download_mode';
-export const SETTING_MERGE_MODE = 'bilibili_helper_merge_mode';
 export const SETTING_SHOW = 'bilibili_helper_show';
 
 // ── Fetch defaults ──
