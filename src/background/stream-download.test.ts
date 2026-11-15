@@ -51,14 +51,30 @@ describe('attachStreamDownloadPort', () => {
 
 	it('streams authorized CDN responses in bounded chunks', async () => {
 		const port = new FakeRuntimePort();
-		const payload = new Uint8Array(64 * 1024 + 3);
-		payload.set([1, 2, 3], payload.length - 3);
+		const firstPayload = new Uint8Array(64 * 1024 + 3);
+		firstPayload.set([1, 2, 3], firstPayload.length - 3);
+		const secondPayload = new Uint8Array([4, 5]);
+		const expectedPayload = new Uint8Array(firstPayload.length + secondPayload.length);
+		expectedPayload.set(firstPayload);
+		expectedPayload.set(secondPayload, firstPayload.length);
+		let pullCount = 0;
+		const responseBody = new ReadableStream<Uint8Array>(
+			{
+				pull(controller) {
+					if (pullCount === 0) controller.enqueue(firstPayload);
+					else if (pullCount === 1) controller.enqueue(secondPayload);
+					else controller.close();
+					pullCount++;
+				}
+			},
+			{ highWaterMark: 0 }
+		);
 		const fetchMock = vi.fn(
 			async () =>
-				new Response(payload, {
+				new Response(responseBody, {
 					status: 206,
 					statusText: 'Partial Content',
-					headers: { 'content-length': String(payload.length) }
+					headers: { 'content-length': String(expectedPayload.length) }
 				})
 		);
 
@@ -72,16 +88,32 @@ describe('attachStreamDownloadPort', () => {
 			url: 'https://upos-sz-mirror.bilivideo.com/video.m4s?sign=test'
 		});
 
-		await new Promise((resolve) => setTimeout(resolve, 10));
+		const waitForMessages = () => new Promise((resolve) => setTimeout(resolve, 10));
+		await waitForMessages();
 		const messages = workerMessages(port);
 		const response = messages.find((message) => message.type === 'response');
-		const chunks = messages.filter((message) => message.type === 'chunk');
-		expect(response).toMatchObject({ status: 206, contentLength: String(payload.length) });
-		expect(chunks).toHaveLength(2);
-		const received = chunks.flatMap((message) => Array.from(new Uint8Array(decodeBase64(String(message.data)))));
-		expect(new Uint8Array(received)).toEqual(payload);
+		const chunks = () => workerMessages(port).filter((message) => message.type === 'chunk');
+		expect(response).toMatchObject({ status: 206, contentLength: String(expectedPayload.length) });
+		expect(chunks()).toHaveLength(1);
+		expect(pullCount).toBe(1);
+
+		port.send({ type: 'ack', sequence: 0 });
+		await waitForMessages();
+		expect(chunks()).toHaveLength(2);
+		expect(pullCount).toBe(1);
+
+		port.send({ type: 'ack', sequence: 1 });
+		await waitForMessages();
+		expect(chunks()).toHaveLength(3);
+		expect(pullCount).toBe(2);
+
+		port.send({ type: 'ack', sequence: 2 });
+		await waitForMessages();
+		const received = chunks().flatMap((message) => Array.from(new Uint8Array(decodeBase64(String(message.data)))));
+		expect(new Uint8Array(received)).toEqual(expectedPayload);
 		expect(messages.at(-1)).toEqual({ type: 'done' });
 		expect(port.disconnected).toBe(true);
+		expect(pullCount).toBe(3);
 		expect(fetchMock).toHaveBeenCalledWith(
 			'https://upos-sz-mirror.bilivideo.com/video.m4s?sign=test',
 			expect.objectContaining({

@@ -9,17 +9,20 @@ export interface PageStreamFetchRequest {
 	url: string;
 }
 
-export type StreamWorkerRequest = { type: 'fetch'; url: string } | { type: 'abort' };
+export type StreamWorkerRequest =
+	{ type: 'fetch'; url: string } | { type: 'abort' } | { type: 'ack'; sequence: number };
+
+export type PageStreamControlMessage = { type: 'abort' } | { type: 'ack'; sequence: number };
 
 export type StreamWorkerMessage =
 	| { type: 'response'; status: number; statusText: string; contentLength: string | null }
-	| { type: 'chunk'; data: string }
+	| { type: 'chunk'; sequence: number; data: string }
 	| { type: 'done' }
 	| { type: 'error'; message: string };
 
 export type PageStreamMessage =
 	| { type: 'response'; status: number; statusText: string; contentLength: string | null }
-	| { type: 'chunk'; buffer: ArrayBuffer }
+	| { type: 'chunk'; sequence: number; buffer: ArrayBuffer }
 	| { type: 'done' }
 	| { type: 'error'; message: string };
 
@@ -68,6 +71,22 @@ export function isPageStreamFetchRequest(value: unknown): value is PageStreamFet
 	);
 }
 
+function isSequence(value: unknown): value is number {
+	return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+export function isPageStreamControlMessage(value: unknown): value is PageStreamControlMessage {
+	if (!value || typeof value !== 'object') return false;
+	const message = value as Partial<PageStreamControlMessage>;
+	return message.type === 'abort' || (message.type === 'ack' && isSequence(message.sequence));
+}
+
+export function isStreamWorkerRequest(value: unknown): value is StreamWorkerRequest {
+	if (!value || typeof value !== 'object') return false;
+	const message = value as Partial<StreamWorkerRequest>;
+	return (message.type === 'fetch' && typeof message.url === 'string') || isPageStreamControlMessage(value);
+}
+
 export function isStreamWorkerMessage(value: unknown): value is StreamWorkerMessage {
 	if (!value || typeof value !== 'object') return false;
 	const message = value as Partial<StreamWorkerMessage>;
@@ -79,7 +98,7 @@ export function isStreamWorkerMessage(value: unknown): value is StreamWorkerMess
 				(message.contentLength === null || typeof message.contentLength === 'string')
 			);
 		case 'chunk':
-			return typeof message.data === 'string';
+			return isSequence(message.sequence) && typeof message.data === 'string';
 		case 'done':
 			return true;
 		case 'error':
@@ -100,7 +119,7 @@ export function isPageStreamMessage(value: unknown): value is PageStreamMessage 
 				(message.contentLength === null || typeof message.contentLength === 'string')
 			);
 		case 'chunk':
-			return message.buffer instanceof ArrayBuffer;
+			return isSequence(message.sequence) && message.buffer instanceof ArrayBuffer;
 		case 'done':
 			return true;
 		case 'error':

@@ -26,12 +26,8 @@ export function fetchStreamThroughExtension(url: string, signal?: AbortSignal): 
 		let responseReceived = false;
 		let settled = false;
 		let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+		let pendingAcknowledgement: number | undefined;
 		let responseTimer: ReturnType<typeof setTimeout>;
-		const body = new ReadableStream<Uint8Array>({
-			start(controller) {
-				streamController = controller;
-			}
-		});
 
 		const cleanup = (): void => {
 			clearTimeout(responseTimer);
@@ -41,8 +37,17 @@ export function fetchStreamThroughExtension(url: string, signal?: AbortSignal): 
 			channel.port1.close();
 		};
 
+		const sendAbort = (): void => {
+			try {
+				channel.port1.postMessage({ type: 'abort' });
+			} catch {
+				// The bridge may already be closed.
+			}
+		};
+
 		const fail = (error: Error): void => {
 			if (settled) return;
+			sendAbort();
 			settled = true;
 			if (responseReceived) {
 				try {
@@ -57,13 +62,33 @@ export function fetchStreamThroughExtension(url: string, signal?: AbortSignal): 
 		};
 
 		const onAbort = (): void => {
-			try {
-				channel.port1.postMessage({ type: 'abort' });
-			} catch {
-				// The bridge may already be closed.
-			}
 			fail(abortError());
 		};
+
+		const body = new ReadableStream<Uint8Array>(
+			{
+				start(controller) {
+					streamController = controller;
+				},
+				pull() {
+					if (pendingAcknowledgement === undefined) return;
+					const sequence = pendingAcknowledgement;
+					pendingAcknowledgement = undefined;
+					try {
+						channel.port1.postMessage({ type: 'ack', sequence });
+					} catch (error) {
+						fail(error instanceof Error ? error : new Error(String(error)));
+					}
+				},
+				cancel() {
+					if (settled) return;
+					sendAbort();
+					settled = true;
+					cleanup();
+				}
+			},
+			{ highWaterMark: 1 }
+		);
 
 		responseTimer = setTimeout(() => {
 			fail(new Error('Timed out waiting for the extension stream worker'));
@@ -106,12 +131,17 @@ export function fetchStreamThroughExtension(url: string, signal?: AbortSignal): 
 					fail(new Error('Received stream data before response headers'));
 					return;
 				}
+				if (pendingAcknowledgement !== undefined) {
+					fail(new Error('Received a stream chunk before acknowledging the previous chunk'));
+					return;
+				}
 				try {
 					const buffer = message.buffer;
 					if (!(buffer instanceof ArrayBuffer)) {
 						fail(new Error('Invalid stream chunk from extension worker'));
 						return;
 					}
+					pendingAcknowledgement = message.sequence;
 					streamController?.enqueue(new Uint8Array(buffer));
 				} catch (error) {
 					fail(error instanceof Error ? error : new Error(String(error)));
@@ -122,6 +152,10 @@ export function fetchStreamThroughExtension(url: string, signal?: AbortSignal): 
 			if (message.type === 'done') {
 				if (!responseReceived) {
 					fail(new Error('Stream ended before response headers'));
+					return;
+				}
+				if (pendingAcknowledgement !== undefined) {
+					fail(new Error('Stream ended before the last chunk was acknowledged'));
 					return;
 				}
 				if (!settled) {

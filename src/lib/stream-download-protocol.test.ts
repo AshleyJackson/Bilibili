@@ -4,6 +4,7 @@ import {
 	encodeBase64,
 	isAllowedStreamUrl,
 	isBilibiliPageUrl,
+	isPageStreamControlMessage,
 	isPageStreamFetchRequest,
 	isPageStreamMessage,
 	isStreamWorkerMessage,
@@ -50,8 +51,14 @@ describe('stream download protocol', () => {
 				contentLength: '5'
 			})
 		).toBe(true);
-		expect(isPageStreamMessage({ type: 'chunk', buffer: new ArrayBuffer(5) })).toBe(true);
+		expect(isStreamWorkerMessage({ type: 'chunk', sequence: 0, data: 'YWJj' })).toBe(true);
+		expect(isStreamWorkerMessage({ type: 'chunk', data: 'YWJj' })).toBe(false);
+		expect(isPageStreamControlMessage({ type: 'ack', sequence: 0 })).toBe(true);
+		expect(isPageStreamControlMessage({ type: 'ack', sequence: -1 })).toBe(false);
+		expect(isPageStreamControlMessage({ type: 'abort' })).toBe(true);
+		expect(isPageStreamMessage({ type: 'chunk', sequence: 0, buffer: new ArrayBuffer(5) })).toBe(true);
 		expect(isPageStreamMessage({ type: 'chunk', data: 'YWJj' })).toBe(false);
+		expect(isPageStreamMessage({ type: 'chunk', buffer: new ArrayBuffer(5) })).toBe(false);
 	});
 
 	it('encodes and decodes stream bytes without changing them', () => {

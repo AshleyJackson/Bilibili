@@ -8,6 +8,7 @@ import {
 import {
 	decodeBase64,
 	isAllowedStreamUrl,
+	isPageStreamControlMessage,
 	isPageStreamFetchRequest,
 	isStreamWorkerMessage,
 	STREAM_FETCH_PORT_NAME
@@ -41,9 +42,9 @@ function relayStreamFetch(pagePort: MessagePort, url: string): void {
 	}
 
 	pagePort.onmessage = (event: MessageEvent<unknown>): void => {
-		if (event.data && typeof event.data === 'object' && (event.data as { type?: unknown }).type === 'abort') {
+		if (isPageStreamControlMessage(event.data)) {
 			try {
-				runtimePort.postMessage({ type: 'abort' });
+				runtimePort.postMessage(event.data);
 			} catch {
 				runtimePort.disconnect();
 			}
