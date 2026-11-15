@@ -102,11 +102,7 @@ export async function downloadAndMerge(
 	});
 
 	const { baseUrl } = getInternals();
-	const [data, cleanup] = await mergeAudioVideo(
-		baseUrl,
-		URL.createObjectURL(audioBlob),
-		URL.createObjectURL(videoBlob)
-	);
+	const [data, cleanup] = await mergeAudioVideo(baseUrl, audioBlob, videoBlob);
 	logInfo(MODULE, 'downloadAndMerge: merge complete', { mergedSize: data.byteLength });
 	return { data, cleanup };
 }

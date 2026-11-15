@@ -146,6 +146,13 @@ describe('toUint8Array', () => {
 		const result = await toUint8Array(new Blob([new Uint8Array([11, 12])]));
 		expect(Array.from(result)).toEqual([11, 12]);
 	});
+
+	it('surfaces a stable error when reading Blob input fails', async () => {
+		const blob = new Blob([new Uint8Array([11, 12])]);
+		vi.spyOn(blob, 'arrayBuffer').mockRejectedValue(new Error('underlying read failure'));
+
+		await expect(toUint8Array(blob)).rejects.toThrow('Unable to read file data. Please try the download again.');
+	});
 });
 
 describe('streamDownload', () => {

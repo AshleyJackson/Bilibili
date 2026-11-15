@@ -4120,6 +4120,13 @@ function waitForElement(selector) {
 		}, 300);
 	});
 }
+async function fileToUint8Array(file) {
+	try {
+		return new Uint8Array(await file.arrayBuffer());
+	} catch {
+		throw new Error("Unable to read file data. Please try the download again.");
+	}
+}
 function downloadBlob(data, filename, container, onDone) {
 	const blob = new Blob([data], { type: "application/octet-stream" });
 	const url = URL.createObjectURL(blob);
@@ -4712,20 +4719,6 @@ async function toUint8Array(input) {
 	});
 	return fileToUint8Array(input);
 }
-function fileToUint8Array(file) {
-	return new Promise((resolve, reject) => {
-		const reader = new FileReader();
-		reader.onload = () => {
-			const { result } = reader;
-			if (result instanceof ArrayBuffer) resolve(new Uint8Array(result));
-			else resolve(/* @__PURE__ */ new Uint8Array());
-		};
-		reader.onerror = (ev) => {
-			reject(Error(`File could not be read! Code=${(ev?.target?.error)?.code ?? -1}`));
-		};
-		reader.readAsArrayBuffer(file);
-	});
-}
 //#endregion
 //#region src/lib/ffmpeg.ts
 var ffmpegInstance = null;
@@ -4771,7 +4764,7 @@ async function getFFmpeg(baseUrl) {
 /**
 * Merge audio and video using FFmpeg, return the merged data buffer.
 */
-async function mergeAudioVideo(baseUrl, audioUrl, videoUrl) {
+async function mergeAudioVideo(baseUrl, audio, video) {
 	logInfo("ffmpeg", "mergeAudioVideo: starting merge");
 	const ffmpeg = await getFFmpeg(baseUrl);
 	const ts = `${Date.now()}${Math.random()}`;
@@ -4779,9 +4772,9 @@ async function mergeAudioVideo(baseUrl, audioUrl, videoUrl) {
 	const videoFile = `${ts}_video.mp4`;
 	const mergedFile = `${ts}_merged.mp4`;
 	logInfo("ffmpeg", `writing audio file (${audioFile})`);
-	await ffmpeg.writeFile(audioFile, await toUint8Array(audioUrl));
+	await ffmpeg.writeFile(audioFile, await toUint8Array(audio));
 	logInfo("ffmpeg", `writing video file (${videoFile})`);
-	await ffmpeg.writeFile(videoFile, await toUint8Array(videoUrl));
+	await ffmpeg.writeFile(videoFile, await toUint8Array(video));
 	logInfo("ffmpeg", "executing ffmpeg merge command");
 	await ffmpeg.exec([
 		"-i",
@@ -4885,6 +4878,194 @@ function createMergeLink({ filename, segments }) {
       </li>`;
 }
 //#endregion
+//#region src/lib/stream-download-protocol.ts
+var STREAM_FETCH_SOURCE = "bilibili-helper-stream-fetch";
+var STREAM_FETCH_REQUEST_TYPE = "bilibili-helper:stream-fetch";
+var AKAMAI_STREAM_HOSTS = /* @__PURE__ */ new Set(["upos-hz-mirrorakam.akamaized.net", "upos-sz-mirrorakam.akamaized.net"]);
+function isAllowedStreamUrl(value) {
+	try {
+		const url = new URL(value);
+		const hostname = url.hostname.toLowerCase();
+		const isBilibiliCdn = /^upos-[a-z0-9-]+\.bilivideo\.com$/.test(hostname) || AKAMAI_STREAM_HOSTS.has(hostname);
+		return url.protocol === "https:" && !url.username && !url.password && (url.port === "" || url.port === "443") && isBilibiliCdn && /\.(?:m4s|mp4|flv)$/i.test(url.pathname);
+	} catch {
+		return false;
+	}
+}
+function isSequence(value) {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+function isPageStreamMessage(value) {
+	if (!value || typeof value !== "object") return false;
+	const message = value;
+	switch (message.type) {
+		case "response": return Number.isInteger(message.status) && typeof message.statusText === "string" && (message.contentLength === null || typeof message.contentLength === "string");
+		case "chunk": return isSequence(message.sequence) && message.buffer instanceof ArrayBuffer;
+		case "done": return true;
+		case "error": return typeof message.message === "string";
+		default: return false;
+	}
+}
+//#endregion
+//#region src/lib/stream-download-client.ts
+var RESPONSE_TIMEOUT_MS = 15e3;
+function abortError() {
+	return new DOMException("The operation was aborted", "AbortError");
+}
+/**
+* Request a CDN response through the isolated content script and extension
+* service worker. Page-world fetch is subject to Bilibili's CORS policy.
+*/
+function fetchStreamThroughExtension(url, signal) {
+	if (!isAllowedStreamUrl(url)) return Promise.reject(/* @__PURE__ */ new Error("Unsupported Bilibili stream URL"));
+	if (signal?.aborted) return Promise.reject(abortError());
+	return new Promise((resolve, reject) => {
+		const channel = new MessageChannel();
+		let responseReceived = false;
+		let settled = false;
+		let streamController;
+		let pendingAcknowledgement;
+		let responseTimer;
+		const cleanup = () => {
+			clearTimeout(responseTimer);
+			signal?.removeEventListener("abort", onAbort);
+			channel.port1.onmessage = null;
+			channel.port1.onmessageerror = null;
+			channel.port1.close();
+		};
+		const sendAbort = () => {
+			try {
+				channel.port1.postMessage({ type: "abort" });
+			} catch {}
+		};
+		const fail = (error) => {
+			if (settled) return;
+			sendAbort();
+			settled = true;
+			if (responseReceived) try {
+				streamController?.error(error);
+			} catch {}
+			else reject(error);
+			cleanup();
+		};
+		const onAbort = () => {
+			fail(abortError());
+		};
+		const body = new ReadableStream({
+			start(controller) {
+				streamController = controller;
+			},
+			pull() {
+				if (pendingAcknowledgement === void 0) return;
+				const sequence = pendingAcknowledgement;
+				pendingAcknowledgement = void 0;
+				try {
+					channel.port1.postMessage({
+						type: "ack",
+						sequence
+					});
+				} catch (error) {
+					fail(error instanceof Error ? error : new Error(String(error)));
+				}
+			},
+			cancel() {
+				if (settled) return;
+				sendAbort();
+				settled = true;
+				cleanup();
+			}
+		}, { highWaterMark: 1 });
+		responseTimer = setTimeout(() => {
+			fail(/* @__PURE__ */ new Error("Timed out waiting for the extension stream worker"));
+		}, RESPONSE_TIMEOUT_MS);
+		channel.port1.onmessage = (event) => {
+			if (!isPageStreamMessage(event.data)) {
+				fail(/* @__PURE__ */ new Error("Invalid response from the extension stream worker"));
+				return;
+			}
+			const message = event.data;
+			if (message.type === "response") {
+				if (responseReceived || settled) {
+					fail(/* @__PURE__ */ new Error("Duplicate response from the extension stream worker"));
+					return;
+				}
+				try {
+					const headers = new Headers();
+					if (message.contentLength && /^\d+$/.test(message.contentLength)) headers.set("content-length", message.contentLength);
+					const responseBody = message.status === 204 || message.status === 205 || message.status === 304 ? null : body;
+					const response = new Response(responseBody, {
+						status: message.status,
+						statusText: message.statusText,
+						headers
+					});
+					responseReceived = true;
+					clearTimeout(responseTimer);
+					resolve(response);
+				} catch (error) {
+					fail(error instanceof Error ? error : new Error(String(error)));
+				}
+				return;
+			}
+			if (message.type === "chunk") {
+				if (!responseReceived || settled) {
+					fail(/* @__PURE__ */ new Error("Received stream data before response headers"));
+					return;
+				}
+				if (pendingAcknowledgement !== void 0) {
+					fail(/* @__PURE__ */ new Error("Received a stream chunk before acknowledging the previous chunk"));
+					return;
+				}
+				try {
+					const buffer = message.buffer;
+					if (!(buffer instanceof ArrayBuffer)) {
+						fail(/* @__PURE__ */ new Error("Invalid stream chunk from extension worker"));
+						return;
+					}
+					pendingAcknowledgement = message.sequence;
+					streamController?.enqueue(new Uint8Array(buffer));
+				} catch (error) {
+					fail(error instanceof Error ? error : new Error(String(error)));
+				}
+				return;
+			}
+			if (message.type === "done") {
+				if (!responseReceived) {
+					fail(/* @__PURE__ */ new Error("Stream ended before response headers"));
+					return;
+				}
+				if (pendingAcknowledgement !== void 0) {
+					fail(/* @__PURE__ */ new Error("Stream ended before the last chunk was acknowledged"));
+					return;
+				}
+				if (!settled) {
+					settled = true;
+					try {
+						streamController?.close();
+					} catch {}
+					cleanup();
+				}
+				return;
+			}
+			fail(new Error(message.message || "Extension stream request failed"));
+		};
+		channel.port1.onmessageerror = () => {
+			fail(/* @__PURE__ */ new Error("Could not read a message from the extension stream worker"));
+		};
+		channel.port1.start();
+		signal?.addEventListener("abort", onAbort, { once: true });
+		try {
+			window.postMessage({
+				source: STREAM_FETCH_SOURCE,
+				type: "request",
+				url,
+				requestType: STREAM_FETCH_REQUEST_TYPE
+			}, window.location.origin, [channel.port2]);
+		} catch (error) {
+			fail(error instanceof Error ? error : new Error(String(error)));
+		}
+	});
+}
+//#endregion
 //#region src/lib/downloader/stream-fetch.ts
 /**
 * Robust stream fetcher for Bilibili CDN .m4s / .mp4 segments.
@@ -4910,11 +5091,9 @@ async function fetchOne(url, onProgress, signal, maxRetries = 2) {
 	for (let attempt = 0;; attempt++) {
 		let response;
 		try {
-			response = await fetch(url, {
-				...STREAM_FETCH_DEFAULTS,
-				signal
-			});
+			response = await fetchStreamThroughExtension(url, signal);
 		} catch (err) {
+			if (signal?.aborted) throw err;
 			if (attempt < maxRetries) {
 				const delay = Math.min(1e3 * Math.pow(2, attempt), 1e4);
 				logWarn(MODULE$5, `network error, retry ${attempt + 1}/${maxRetries} in ${delay}ms`, {
@@ -4977,6 +5156,7 @@ async function fetchOne(url, onProgress, signal, maxRetries = 2) {
 				error: err.message
 			});
 			await reader.cancel().catch(() => {});
+			if (signal?.aborted) throw err;
 			if (attempt < maxRetries) continue;
 			throw err;
 		}
@@ -5011,6 +5191,7 @@ async function fetchSegment(urls, onProgress, signal) {
 		} catch (err) {
 			lastErr = err;
 			logError(MODULE$5, `fetch failed for URL ${i}`, { url: url.slice(0, 80) }, err);
+			if (signal?.aborted) throw err;
 		}
 	}
 	throw new Error(`all segment URLs failed; last error: ${lastErr?.message ?? lastErr}`);
@@ -5063,7 +5244,7 @@ async function downloadAndMerge(segments, onProgress) {
 		videoSize: videoBlob.size
 	});
 	const { baseUrl } = getInternals();
-	const [data, cleanup] = await mergeAudioVideo(baseUrl, URL.createObjectURL(audioBlob), URL.createObjectURL(videoBlob));
+	const [data, cleanup] = await mergeAudioVideo(baseUrl, audioBlob, videoBlob);
 	logInfo(MODULE$4, "downloadAndMerge: merge complete", { mergedSize: data.byteLength });
 	return {
 		data,
