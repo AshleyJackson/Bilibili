@@ -36,6 +36,12 @@ export interface TaskSummary {
 
 type Listener = (id: string) => void;
 
+/**
+ * A saved file's object URL must outlive the anchor click that starts the
+ * browser download, so URLs for files nobody can re-save are released late.
+ */
+export const RELEASE_AFTER_SAVE_MS = 60_000;
+
 function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
@@ -43,6 +49,11 @@ function errorMessage(err: unknown): string {
 export class DownloadTasks {
 	private readonly states = new Map<string, TaskState>();
 	private readonly listeners = new Set<Listener>();
+	/** The live attempt per option; callbacks from any other attempt are stale. */
+	private readonly attempts = new Map<string, symbol>();
+	/** Option ids currently offered, or null before the first retain(). */
+	private retained: ReadonlySet<string> | null = null;
+	private readonly pendingReleases = new Map<string, ReturnType<typeof setTimeout>>();
 
 	constructor(private readonly deps: DownloadDeps) {}
 
@@ -83,24 +94,46 @@ export class DownloadTasks {
 		if (this.isActive(option.id)) return;
 		this.forget(option.id);
 
+		const attempt = Symbol(option.id);
+		this.attempts.set(option.id, attempt);
+		// When one stream of a merged download fails, the other keeps reporting progress.
+		const live = (): boolean => this.attempts.get(option.id) === attempt;
 		const startedAt = this.deps.now();
 		const progress = (received: number, total: number): void => {
-			this.set(option.id, { status: 'downloading', received, total, startedAt });
+			if (live()) this.set(option.id, { status: 'downloading', received, total, startedAt });
+		};
+		const merging = (): void => {
+			if (!live()) return;
+			this.set(option.id, { status: 'merging' });
+			this.deps.log(`正在合并音视频 ${option.filename}`);
 		};
 		progress(0, option.size ?? 0);
 		this.deps.log(`开始下载 ${option.filename}`);
 
+		let finalState: TaskState;
 		try {
 			const blob =
-				option.kind === 'merged' ? await this.runMerged(option, progress) : await this.runSingle(option, progress);
+				option.kind === 'merged'
+					? await this.runMerged(option, progress, merging)
+					: await this.runSingle(option, progress);
 			const url = this.deps.saveBlob(blob, option.filename);
-			this.set(option.id, { status: 'done', url, size: blob.size });
+			finalState = { status: 'done', url, size: blob.size };
 			this.deps.log(`已保存 ${option.filename}（${formatSize(blob.size)}）`);
 		} catch (err) {
 			const message = errorMessage(err);
-			this.set(option.id, { status: 'error', message });
+			finalState = { status: 'error', message };
 			this.deps.log(`下载失败 ${option.filename}：${message}`);
 		}
+		this.attempts.delete(option.id);
+
+		if (this.retained && !this.retained.has(option.id)) {
+			// The quality or episode changed mid-download: no row can show this result.
+			if (finalState.status === 'done') this.releaseLater(finalState.url);
+			this.states.delete(option.id);
+			this.emit(option.id);
+			return;
+		}
+		this.set(option.id, finalState);
 	}
 
 	/** Drop finished/failed state (revoking its object URL). Running downloads are kept. */
@@ -114,6 +147,7 @@ export class DownloadTasks {
 
 	/** Forget everything not in `ids`, e.g. after a quality or episode change. */
 	retain(ids: ReadonlySet<string>): void {
+		this.retained = new Set(ids);
 		for (const id of [...this.states.keys()]) {
 			if (!ids.has(id)) this.forget(id);
 		}
@@ -123,8 +157,22 @@ export class DownloadTasks {
 		for (const state of this.states.values()) {
 			if (state.status === 'done') this.deps.revokeUrl(state.url);
 		}
+		for (const [url, timer] of this.pendingReleases) {
+			clearTimeout(timer);
+			this.deps.revokeUrl(url);
+		}
+		this.pendingReleases.clear();
 		this.states.clear();
+		this.attempts.clear();
 		this.listeners.clear();
+	}
+
+	private releaseLater(url: string): void {
+		const timer = setTimeout(() => {
+			this.pendingReleases.delete(url);
+			this.deps.revokeUrl(url);
+		}, RELEASE_AFTER_SAVE_MS);
+		this.pendingReleases.set(url, timer);
 	}
 
 	private async runSingle(option: DownloadOption, progress: (r: number, t: number) => void): Promise<Blob> {
@@ -134,7 +182,11 @@ export class DownloadTasks {
 		);
 	}
 
-	private async runMerged(option: DownloadOption, progress: (r: number, t: number) => void): Promise<Blob> {
+	private async runMerged(
+		option: DownloadOption,
+		progress: (r: number, t: number) => void,
+		merging: () => void
+	): Promise<Blob> {
 		const [audio, video] = option.segments;
 		const parts = {
 			audio: { received: 0, total: audio.size ?? 0 },
@@ -147,10 +199,7 @@ export class DownloadTasks {
 				const known = parts.audio.total > 0 && parts.video.total > 0;
 				progress(parts.audio.received + parts.video.received, known ? parts.audio.total + parts.video.total : 0);
 			},
-			() => {
-				this.set(option.id, { status: 'merging' });
-				this.deps.log(`正在合并音视频 ${option.filename}`);
-			}
+			merging
 		);
 		try {
 			return new Blob([data], { type: 'video/mp4' });

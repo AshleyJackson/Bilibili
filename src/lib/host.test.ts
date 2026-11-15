@@ -80,14 +80,61 @@ describe('host', () => {
 		expect(btn.style.position).toBe('fixed');
 	});
 
-	it('re-injects the button when the page drops it', () => {
-		const bar = toolbar();
+	it('restores the button after a toolbar re-render without new video data', async () => {
+		toolbar();
+		showDownloadInfo(info);
+		document.querySelector('.video-toolbar-left')!.remove();
+		toolbar();
+
+		await vi.waitFor(() => expect(document.getElementById(DOWNLOAD_BTN_ID)).not.toBeNull());
+		const btn = document.getElementById(DOWNLOAD_BTN_ID)!;
+		expect(btn.previousElementSibling?.id).toBe('share');
+		expect(document.querySelectorAll(`#${DOWNLOAD_BTN_ID}`)).toHaveLength(1);
+	});
+
+	it('restores a button removed on its own', async () => {
+		toolbar();
 		showDownloadInfo(info);
 		document.getElementById(DOWNLOAD_BTN_ID)!.remove();
-		bar.querySelector('#share')!.after(document.createElement('div'));
 
+		await vi.waitFor(() => expect(document.getElementById(DOWNLOAD_BTN_ID)?.previousElementSibling?.id).toBe('share'));
+	});
+
+	it('moves the floating button into the toolbar once it appears', async () => {
 		showDownloadInfo(info);
+		expect(document.getElementById(DOWNLOAD_BTN_ID)!.parentElement).toBe(document.body);
+
+		toolbar();
+
+		await vi.waitFor(() => expect(document.getElementById(DOWNLOAD_BTN_ID)?.previousElementSibling?.id).toBe('share'));
 		expect(document.querySelectorAll(`#${DOWNLOAD_BTN_ID}`)).toHaveLength(1);
+	});
+
+	it('keeps an open popup open and anchored to the restored button', async () => {
+		toolbar();
+		showDownloadInfo(info);
+		const original = document.getElementById(DOWNLOAD_BTN_ID)!;
+		original.click();
+		original.remove();
+
+		await vi.waitFor(() => expect(document.getElementById(DOWNLOAD_BTN_ID)).not.toBeNull());
+		const restored = document.getElementById(DOWNLOAD_BTN_ID)!;
+		expect(restored).not.toBe(original);
+		expect(document.getElementById(POPUP_HOST_ID)).not.toBeNull();
+		expect(restored.getAttribute('aria-expanded')).toBe('true');
+
+		restored.click();
+		expect(document.getElementById(POPUP_HOST_ID)).toBeNull();
+	});
+
+	it('stops watching after cleanup()', async () => {
+		toolbar();
+		showDownloadInfo(info);
+		cleanup();
+		document.body.appendChild(document.createElement('div'));
+
+		await new Promise((resolve) => setTimeout(resolve, 40));
+		expect(document.getElementById(DOWNLOAD_BTN_ID)).toBeNull();
 	});
 
 	it('toggles the popup on click and Enter, and reflects it in aria-expanded', () => {

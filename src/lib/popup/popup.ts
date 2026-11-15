@@ -32,6 +32,7 @@ export class DownloadPopup {
 	private readonly rowEls = new Map<string, HTMLElement>();
 	private readonly dirtyRows = new Set<string>();
 	private frameQueued = false;
+	private focusOnReveal = false;
 	private readonly unsubscribe: () => void;
 
 	constructor(
@@ -82,9 +83,10 @@ export class DownloadPopup {
 		document.addEventListener('pointerdown', this.onPointerDown, true);
 		document.addEventListener('keydown', this.onKeyDown, true);
 		this.stopAutoUpdate = autoUpdate(anchor, host, () => this.position());
+		// Hidden elements can't take focus, so the first focus waits for position().
+		this.focusOnReveal = true;
 		this.render();
 		this.onToggle(true);
-		this.panel.querySelector<HTMLElement>('[data-action="download"]')?.focus({ preventScroll: true });
 	}
 
 	close(): void {
@@ -190,8 +192,13 @@ export class DownloadPopup {
 				})
 			]
 		}).then(({ x, y }) => {
+			if (this.host !== host) return;
 			host.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
 			host.style.visibility = '';
+			if (this.focusOnReveal) {
+				this.focusOnReveal = false;
+				this.panel?.querySelector<HTMLElement>('[data-action="download"]')?.focus({ preventScroll: true });
+			}
 		});
 	}
 

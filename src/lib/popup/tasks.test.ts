@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { DownloadTasks, type DownloadDeps } from './tasks';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { DownloadTasks, RELEASE_AFTER_SAVE_MS, type DownloadDeps } from './tasks';
 import type { DownloadOption } from '../download';
 
 const single: DownloadOption = {
@@ -204,6 +204,124 @@ describe('DownloadTasks', () => {
 		unsubscribe();
 		await tasks.start(single);
 		expect(listener).not.toHaveBeenCalled();
+	});
+
+	it('keeps the error when the other merged stream reports progress after a failure', async () => {
+		let report: (which: 'audio' | 'video', r: number, t: number) => void = () => {};
+		let merging: () => void = () => {};
+		const deps = makeDeps({
+			downloadAndMerge: vi
+				.fn<DownloadDeps['downloadAndMerge']>(async () => ({ data: new ArrayBuffer(90), cleanup: vi.fn() }))
+				.mockImplementationOnce(async (_s, onProgress, onMerging) => {
+					report = onProgress;
+					merging = onMerging;
+					throw new Error('audio download failed: HTTP 403');
+				})
+		});
+		const tasks = new DownloadTasks(deps);
+
+		await tasks.start(merged);
+		report('video', 50, 60);
+		merging();
+
+		expect(tasks.get(merged.id)).toEqual({ status: 'error', message: 'audio download failed: HTTP 403' });
+		expect(tasks.isActive(merged.id)).toBe(false);
+		expect(tasks.summary().active).toBe(0);
+
+		await tasks.start(merged);
+		expect(deps.downloadAndMerge).toHaveBeenCalledTimes(2);
+		expect(tasks.get(merged.id)?.status).toBe('done');
+	});
+
+	it('ignores progress from an earlier attempt once a retry is running', async () => {
+		const reports: Array<(r: number, t: number) => void> = [];
+		const first = deferred<Blob>();
+		const second = deferred<Blob>();
+		const gates = [first, second];
+		const deps = makeDeps({
+			downloadStream: vi.fn((_seg, onProgress) => {
+				reports.push(onProgress);
+				return gates[reports.length - 1].promise;
+			})
+		});
+		const tasks = new DownloadTasks(deps);
+
+		const attempt1 = tasks.start(single);
+		first.reject(new Error('first attempt failed'));
+		await attempt1;
+		const attempt2 = tasks.start(single);
+
+		reports[0](99, 100);
+		expect(tasks.get(single.id)).toMatchObject({ status: 'downloading', received: 0 });
+		reports[1](10, 100);
+		expect(tasks.get(single.id)).toMatchObject({ status: 'downloading', received: 10 });
+
+		second.resolve(new Blob([]));
+		await attempt2;
+		expect(tasks.get(single.id)?.status).toBe('done');
+	});
+
+	describe('downloads that finish after their option is no longer offered', () => {
+		afterEach(() => vi.useRealTimers());
+
+		it('still saves the file, drops its state and releases the URL after a delay', async () => {
+			vi.useFakeTimers();
+			const gate = deferred<Blob>();
+			const deps = makeDeps({ downloadStream: vi.fn(() => gate.promise) });
+			const tasks = new DownloadTasks(deps);
+			tasks.retain(new Set([single.id]));
+			const run = tasks.start(single);
+
+			tasks.retain(new Set(['video:https://cdn/other-quality.m4s']));
+			expect(tasks.isActive(single.id)).toBe(true);
+			gate.resolve(new Blob([new Uint8Array(100)]));
+			await run;
+
+			expect(deps.saveBlob).toHaveBeenCalledOnce();
+			expect(tasks.get(single.id)).toBeUndefined();
+			expect(deps.revokeUrl).not.toHaveBeenCalled();
+
+			vi.advanceTimersByTime(RELEASE_AFTER_SAVE_MS);
+			expect(deps.revokeUrl).toHaveBeenCalledWith('blob:saved');
+		});
+
+		it('drops failed state too', async () => {
+			const gate = deferred<Blob>();
+			const tasks = new DownloadTasks(makeDeps({ downloadStream: vi.fn(() => gate.promise) }));
+			tasks.retain(new Set([single.id]));
+			const run = tasks.start(single);
+			tasks.retain(new Set());
+			gate.reject(new Error('HTTP 403'));
+			await run;
+			expect(tasks.get(single.id)).toBeUndefined();
+		});
+
+		it('keeps the result when the option is offered again before it finishes', async () => {
+			const gate = deferred<Blob>();
+			const tasks = new DownloadTasks(makeDeps({ downloadStream: vi.fn(() => gate.promise) }));
+			const run = tasks.start(single);
+			tasks.retain(new Set());
+			tasks.retain(new Set([single.id]));
+			gate.resolve(new Blob([]));
+			await run;
+			expect(tasks.get(single.id)).toMatchObject({ status: 'done', url: 'blob:saved' });
+		});
+
+		it('dispose() revokes URLs still waiting for release', async () => {
+			vi.useFakeTimers();
+			const gate = deferred<Blob>();
+			const deps = makeDeps({ downloadStream: vi.fn(() => gate.promise) });
+			const tasks = new DownloadTasks(deps);
+			const run = tasks.start(single);
+			tasks.retain(new Set());
+			gate.resolve(new Blob([]));
+			await run;
+
+			tasks.dispose();
+			expect(deps.revokeUrl).toHaveBeenCalledOnce();
+			vi.advanceTimersByTime(RELEASE_AFTER_SAVE_MS);
+			expect(deps.revokeUrl).toHaveBeenCalledOnce();
+		});
 	});
 
 	it('dispose() revokes every saved URL', async () => {

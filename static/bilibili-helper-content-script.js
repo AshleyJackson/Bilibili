@@ -5237,6 +5237,11 @@ function extensionForUrl(url) {
 * survives closing and reopening the popup, and so the toolbar button can show
 * overall progress while the popup is closed.
 */
+/**
+* A saved file's object URL must outlive the anchor click that starts the
+* browser download, so URLs for files nobody can re-save are released late.
+*/
+var RELEASE_AFTER_SAVE_MS = 6e4;
 function errorMessage(err) {
 	return err instanceof Error ? err.message : String(err);
 }
@@ -5244,6 +5249,11 @@ var DownloadTasks = class {
 	deps;
 	states = /* @__PURE__ */ new Map();
 	listeners = /* @__PURE__ */ new Set();
+	/** The live attempt per option; callbacks from any other attempt are stale. */
+	attempts = /* @__PURE__ */ new Map();
+	/** Option ids currently offered, or null before the first retain(). */
+	retained = null;
+	pendingReleases = /* @__PURE__ */ new Map();
 	constructor(deps) {
 		this.deps = deps;
 	}
@@ -5278,34 +5288,50 @@ var DownloadTasks = class {
 	async start(option) {
 		if (this.isActive(option.id)) return;
 		this.forget(option.id);
+		const attempt = Symbol(option.id);
+		this.attempts.set(option.id, attempt);
+		const live = () => this.attempts.get(option.id) === attempt;
 		const startedAt = this.deps.now();
 		const progress = (received, total) => {
-			this.set(option.id, {
+			if (live()) this.set(option.id, {
 				status: "downloading",
 				received,
 				total,
 				startedAt
 			});
 		};
+		const merging = () => {
+			if (!live()) return;
+			this.set(option.id, { status: "merging" });
+			this.deps.log(`正在合并音视频 ${option.filename}`);
+		};
 		progress(0, option.size ?? 0);
 		this.deps.log(`开始下载 ${option.filename}`);
+		let finalState;
 		try {
-			const blob = option.kind === "merged" ? await this.runMerged(option, progress) : await this.runSingle(option, progress);
-			const url = this.deps.saveBlob(blob, option.filename);
-			this.set(option.id, {
+			const blob = option.kind === "merged" ? await this.runMerged(option, progress, merging) : await this.runSingle(option, progress);
+			finalState = {
 				status: "done",
-				url,
+				url: this.deps.saveBlob(blob, option.filename),
 				size: blob.size
-			});
+			};
 			this.deps.log(`已保存 ${option.filename}（${formatSize(blob.size)}）`);
 		} catch (err) {
 			const message = errorMessage(err);
-			this.set(option.id, {
+			finalState = {
 				status: "error",
 				message
-			});
+			};
 			this.deps.log(`下载失败 ${option.filename}：${message}`);
 		}
+		this.attempts.delete(option.id);
+		if (this.retained && !this.retained.has(option.id)) {
+			if (finalState.status === "done") this.releaseLater(finalState.url);
+			this.states.delete(option.id);
+			this.emit(option.id);
+			return;
+		}
+		this.set(option.id, finalState);
 	}
 	/** Drop finished/failed state (revoking its object URL). Running downloads are kept. */
 	forget(id) {
@@ -5317,18 +5343,32 @@ var DownloadTasks = class {
 	}
 	/** Forget everything not in `ids`, e.g. after a quality or episode change. */
 	retain(ids) {
+		this.retained = new Set(ids);
 		for (const id of [...this.states.keys()]) if (!ids.has(id)) this.forget(id);
 	}
 	dispose() {
 		for (const state of this.states.values()) if (state.status === "done") this.deps.revokeUrl(state.url);
+		for (const [url, timer] of this.pendingReleases) {
+			clearTimeout(timer);
+			this.deps.revokeUrl(url);
+		}
+		this.pendingReleases.clear();
 		this.states.clear();
+		this.attempts.clear();
 		this.listeners.clear();
+	}
+	releaseLater(url) {
+		const timer = setTimeout(() => {
+			this.pendingReleases.delete(url);
+			this.deps.revokeUrl(url);
+		}, RELEASE_AFTER_SAVE_MS);
+		this.pendingReleases.set(url, timer);
 	}
 	async runSingle(option, progress) {
 		const fallbackTotal = option.size ?? 0;
 		return this.deps.downloadStream(option.segments[0], (received, total) => progress(received, total > 0 ? total : fallbackTotal));
 	}
-	async runMerged(option, progress) {
+	async runMerged(option, progress, merging) {
 		const [audio, video] = option.segments;
 		const parts = {
 			audio: {
@@ -5350,10 +5390,7 @@ var DownloadTasks = class {
 			};
 			const known = parts.audio.total > 0 && parts.video.total > 0;
 			progress(parts.audio.received + parts.video.received, known ? parts.audio.total + parts.video.total : 0);
-		}, () => {
-			this.set(option.id, { status: "merging" });
-			this.deps.log(`正在合并音视频 ${option.filename}`);
-		});
+		}, merging);
 		try {
 			return new Blob([data], { type: "video/mp4" });
 		} finally {
@@ -6638,7 +6675,7 @@ var POPUP_STYLES = `
 	z-index: 100000;
 	font-size: 13px;
 	line-height: 1.5;
-	color: var(--text1, #18191c);
+	color: var(--fg1);
 	text-align: left;
 	letter-spacing: normal;
 	--pink: var(--brand_pink, #ff6699);
@@ -6649,8 +6686,10 @@ var POPUP_STYLES = `
 	--muted: var(--graph_bg_regular, #f1f2f3);
 	--hover: var(--graph_bg_thin, #f6f7f8);
 	--line: var(--line_regular, #e3e5e7);
-	--text2: var(--text2, #61666d);
-	--text3: var(--text3, #9499a0);
+	/* Separate local names: a property that references itself is a cycle and both values drop. */
+	--fg1: var(--text1, #18191c);
+	--fg2: var(--text2, #61666d);
+	--fg3: var(--text3, #9499a0);
 }
 * { box-sizing: border-box; }
 svg { width: 16px; height: 16px; display: block; flex: none; }
@@ -6672,7 +6711,7 @@ button { font: inherit; color: inherit; }
 
 .head { display: flex; align-items: flex-start; gap: 8px; padding: 14px 10px 12px 16px; }
 .heading { flex: 1; min-width: 0; }
-.eyebrow { display: flex; align-items: center; gap: 4px; margin: 0 0 4px; font-size: 12px; color: var(--text3); }
+.eyebrow { display: flex; align-items: center; gap: 4px; margin: 0 0 4px; font-size: 12px; color: var(--fg3); }
 .eyebrow svg { width: 14px; height: 14px; color: var(--pink); }
 .title {
 	margin: 0;
@@ -6692,7 +6731,7 @@ button { font: inherit; color: inherit; }
 	padding: 0 6px;
 	border-radius: 4px;
 	background: var(--muted);
-	color: var(--text2);
+	color: var(--fg2);
 	font-variant-numeric: tabular-nums;
 }
 .chip.quality { background: rgba(255, 102, 153, 0.12); color: var(--pink); font-weight: 600; }
@@ -6707,10 +6746,10 @@ button { font: inherit; color: inherit; }
 	border: 0;
 	border-radius: 6px;
 	background: transparent;
-	color: var(--text3);
+	color: var(--fg3);
 	cursor: pointer;
 }
-.icon-btn:hover { background: var(--muted); color: var(--text1, #18191c); }
+.icon-btn:hover { background: var(--muted); color: var(--fg1); }
 .icon-btn.copied { color: var(--green); }
 .icon-btn:focus-visible, .btn:focus-visible, .text-btn:focus-visible {
 	outline: 2px solid var(--blue);
@@ -6730,7 +6769,7 @@ button { font: inherit; color: inherit; }
 	place-items: center;
 	border-radius: 8px;
 	background: var(--muted);
-	color: var(--text2);
+	color: var(--fg2);
 }
 .tile svg { width: 18px; height: 18px; }
 .row[data-recommended] .tile { background: rgba(255, 102, 153, 0.12); color: var(--pink); }
@@ -6746,10 +6785,10 @@ button { font: inherit; color: inherit; }
 	background: var(--pink);
 	color: #fff;
 }
-.percent { margin-left: auto; font-size: 12px; color: var(--text2); font-variant-numeric: tabular-nums; }
+.percent { margin-left: auto; font-size: 12px; color: var(--fg2); font-variant-numeric: tabular-nums; }
 .line2 {
 	font-size: 12px;
-	color: var(--text3);
+	color: var(--fg3);
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -6772,7 +6811,7 @@ button { font: inherit; color: inherit; }
 	border: 1px solid var(--line);
 	border-radius: 6px;
 	background: transparent;
-	color: var(--text1, #18191c);
+	color: var(--fg1);
 	font-size: 13px;
 	font-weight: 500;
 	white-space: nowrap;
@@ -6784,10 +6823,10 @@ button { font: inherit; color: inherit; }
 .btn.primary { border-color: var(--pink); background: var(--pink); color: #fff; }
 .btn.primary:hover { filter: brightness(1.08); color: #fff; }
 
-.state { padding: 32px 24px; text-align: center; color: var(--text3); }
+.state { padding: 32px 24px; text-align: center; color: var(--fg3); }
 .state svg { width: 28px; height: 28px; margin: 0 auto 10px; }
 .state.error svg { color: var(--red); }
-.state strong { display: block; margin-bottom: 4px; color: var(--text1, #18191c); font-weight: 500; }
+.state strong { display: block; margin-bottom: 4px; color: var(--fg1); font-weight: 500; }
 .spinner {
 	width: 22px;
 	height: 22px;
@@ -6807,7 +6846,7 @@ button { font: inherit; color: inherit; }
 	padding: 8px 10px 8px 16px;
 	border-top: 1px solid var(--line);
 	font-size: 12px;
-	color: var(--text3);
+	color: var(--fg3);
 }
 .hint { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; }
 .hint svg, .text-btn svg { width: 14px; height: 14px; }
@@ -6819,7 +6858,7 @@ button { font: inherit; color: inherit; }
 	border: 0;
 	border-radius: 4px;
 	background: none;
-	color: var(--text3);
+	color: var(--fg3);
 	font-size: 12px;
 	cursor: pointer;
 }
@@ -6835,7 +6874,7 @@ button { font: inherit; color: inherit; }
 	border-top: 1px solid var(--line);
 	background: var(--hover);
 }
-.logs-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px 0 16px; font-size: 12px; color: var(--text3); }
+.logs-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px 0 16px; font-size: 12px; color: var(--fg3); }
 .log-lines {
 	flex: 0 1 auto;
 	min-height: 0;
@@ -6844,11 +6883,11 @@ button { font: inherit; color: inherit; }
 	max-height: 160px;
 	overflow: auto;
 	font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-	color: var(--text2);
+	color: var(--fg2);
 	white-space: pre-wrap;
 	word-break: break-all;
 }
-.log-lines:empty::before { content: '暂无日志'; color: var(--text3); }
+.log-lines:empty::before { content: '暂无日志'; color: var(--fg3); }
 
 @media (prefers-reduced-motion: reduce) {
 	.panel, .bar > span, .bar.indeterminate > span, .spinner { animation: none; transition: none; }
@@ -7063,7 +7102,7 @@ var POPUP_HOST_ID = "bilibili-helper-popup";
 var MAX_LOG_LINES = 300;
 var VIEWPORT_PADDING = 8;
 var COPIED_FEEDBACK_MS = 1500;
-var schedule = typeof requestAnimationFrame === "function" ? (cb) => requestAnimationFrame(cb) : (cb) => setTimeout(cb, 16);
+var schedule$1 = typeof requestAnimationFrame === "function" ? (cb) => requestAnimationFrame(cb) : (cb) => setTimeout(cb, 16);
 var DownloadPopup = class {
 	tasks;
 	now;
@@ -7080,6 +7119,7 @@ var DownloadPopup = class {
 	rowEls = /* @__PURE__ */ new Map();
 	dirtyRows = /* @__PURE__ */ new Set();
 	frameQueued = false;
+	focusOnReveal = false;
 	unsubscribe;
 	constructor(tasks, now = () => Date.now(), onToggle = () => {}) {
 		this.tasks = tasks;
@@ -7121,9 +7161,9 @@ var DownloadPopup = class {
 		document.addEventListener("pointerdown", this.onPointerDown, true);
 		document.addEventListener("keydown", this.onKeyDown, true);
 		this.stopAutoUpdate = autoUpdate(anchor, host, () => this.position());
+		this.focusOnReveal = true;
 		this.render();
 		this.onToggle(true);
-		this.panel.querySelector("[data-action=\"download\"]")?.focus({ preventScroll: true });
 	}
 	close() {
 		if (!this.host) return;
@@ -7178,7 +7218,7 @@ var DownloadPopup = class {
 		this.dirtyRows.add(id);
 		if (this.frameQueued) return;
 		this.frameQueued = true;
-		schedule(() => {
+		schedule$1(() => {
 			this.frameQueued = false;
 			for (const dirty of this.dirtyRows) this.patchRow(dirty);
 			this.dirtyRows.clear();
@@ -7213,8 +7253,13 @@ var DownloadPopup = class {
 				})
 			]
 		}).then(({ x, y }) => {
+			if (this.host !== host) return;
 			host.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
 			host.style.visibility = "";
+			if (this.focusOnReveal) {
+				this.focusOnReveal = false;
+				this.panel?.querySelector("[data-action=\"download\"]")?.focus({ preventScroll: true });
+			}
 		});
 	}
 	onClick = (event) => {
@@ -7286,6 +7331,9 @@ var popup = null;
 var btnEl = null;
 var btnLabel = null;
 var placement = "bottom-start";
+var observer = null;
+var restoreQueued = false;
+var schedule = typeof requestAnimationFrame === "function" ? (cb) => requestAnimationFrame(cb) : (cb) => setTimeout(cb, 16);
 function controller() {
 	if (popup) return popup;
 	tasks = new DownloadTasks({
@@ -7369,15 +7417,43 @@ function createToolbarButton() {
 	`;
 	return el;
 }
+function findShareItem() {
+	return document.querySelector(".toolbar-left-item-wrap .video-share-wrap")?.closest(".toolbar-left-item-wrap") ?? null;
+}
+/** The button was dropped by a re-render, or is floating while a toolbar now exists. */
+function buttonNeedsRestore() {
+	if (!btnEl) return false;
+	if (!btnEl.isConnected) return true;
+	return placement === "top-end" && findShareItem() !== null;
+}
+function restoreButton() {
+	restoreQueued = false;
+	if (!buttonNeedsRestore()) return;
+	logInfo(MODULE$3, "download button missing or misplaced, restoring");
+	ensureButton();
+}
 /**
-* Inject the download button, re-injecting it if Bilibili's SPA re-rendered
-* the toolbar and dropped it.
+* Bilibili's SPA can re-render the toolbar without a URL or quality change,
+* so the button is restored on DOM changes rather than on new video data.
 */
+function watchButton() {
+	if (observer || typeof MutationObserver !== "function") return;
+	observer = new MutationObserver(() => {
+		if (restoreQueued || !buttonNeedsRestore()) return;
+		restoreQueued = true;
+		schedule(restoreButton);
+	});
+	observer.observe(document.body, {
+		childList: true,
+		subtree: true
+	});
+}
+/** Inject the download button, or move it back into a re-rendered toolbar. */
 function ensureButton() {
-	if (btnEl?.isConnected) return btnEl;
+	if (btnEl && !buttonNeedsRestore()) return btnEl;
 	btnEl?.remove();
 	cleanupOldHost();
-	const shareItem = document.querySelector(".toolbar-left-item-wrap .video-share-wrap")?.closest(".toolbar-left-item-wrap");
+	const shareItem = findShareItem();
 	if (shareItem?.parentNode) {
 		btnEl = createToolbarButton();
 		placement = "bottom-start";
@@ -7391,8 +7467,10 @@ function ensureButton() {
 	}
 	btnLabel = btnEl.querySelector("[data-label]");
 	decorate(btnEl);
-	controller();
+	const popupController = controller();
 	updateButtonLabel();
+	if (popupController.isOpen()) popupController.open(btnEl, placement);
+	watchButton();
 	return btnEl;
 }
 /**

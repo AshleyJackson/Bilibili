@@ -90,6 +90,29 @@ describe('DownloadPopup', () => {
 		expect(onToggle).toHaveBeenLastCalledWith(true);
 	});
 
+	it('focuses the first download button only once the popup is positioned and visible', async () => {
+		popup.setInfo(info);
+		popup.open(anchor, 'bottom-start');
+		const host = document.getElementById(POPUP_HOST_ID)!;
+
+		expect(host.style.visibility).toBe('hidden');
+		expect(root().activeElement).toBeNull();
+
+		await vi.waitFor(() => expect(host.style.visibility).toBe(''));
+		expect(root().activeElement).toBe(rows()[0].querySelector('[data-action="download"]'));
+	});
+
+	it('does not focus or reveal a popup that closed before positioning finished', async () => {
+		popup.setInfo(info);
+		popup.open(anchor, 'bottom-start');
+		const host = document.getElementById(POPUP_HOST_ID)!;
+		popup.close();
+
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(host.style.visibility).toBe('hidden');
+		expect(host.shadowRoot!.activeElement).toBeNull();
+	});
+
 	it('does not offer the old mode toggles or an always-visible log box', () => {
 		popup.setInfo(info);
 		popup.open(anchor, 'bottom-start');

@@ -27,6 +27,11 @@ let popup: DownloadPopup | null = null;
 let btnEl: HTMLElement | null = null;
 let btnLabel: HTMLElement | null = null;
 let placement: Placement = 'bottom-start';
+let observer: MutationObserver | null = null;
+let restoreQueued = false;
+
+const schedule: (cb: () => void) => void =
+	typeof requestAnimationFrame === 'function' ? (cb) => requestAnimationFrame(cb) : (cb) => setTimeout(cb, 16);
 
 function controller(): DownloadPopup {
 	if (popup) return popup;
@@ -118,18 +123,47 @@ function createToolbarButton(): HTMLElement {
 	return el;
 }
 
+function findShareItem(): Element | null {
+	return (
+		document.querySelector('.toolbar-left-item-wrap .video-share-wrap')?.closest('.toolbar-left-item-wrap') ?? null
+	);
+}
+
+/** The button was dropped by a re-render, or is floating while a toolbar now exists. */
+function buttonNeedsRestore(): boolean {
+	if (!btnEl) return false;
+	if (!btnEl.isConnected) return true;
+	return placement === 'top-end' && findShareItem() !== null;
+}
+
+function restoreButton(): void {
+	restoreQueued = false;
+	if (!buttonNeedsRestore()) return;
+	logInfo(MODULE, 'download button missing or misplaced, restoring');
+	ensureButton();
+}
+
 /**
- * Inject the download button, re-injecting it if Bilibili's SPA re-rendered
- * the toolbar and dropped it.
+ * Bilibili's SPA can re-render the toolbar without a URL or quality change,
+ * so the button is restored on DOM changes rather than on new video data.
  */
+function watchButton(): void {
+	if (observer || typeof MutationObserver !== 'function') return;
+	observer = new MutationObserver(() => {
+		if (restoreQueued || !buttonNeedsRestore()) return;
+		restoreQueued = true;
+		schedule(restoreButton);
+	});
+	observer.observe(document.body, { childList: true, subtree: true });
+}
+
+/** Inject the download button, or move it back into a re-rendered toolbar. */
 function ensureButton(): HTMLElement {
-	if (btnEl?.isConnected) return btnEl;
+	if (btnEl && !buttonNeedsRestore()) return btnEl;
 	btnEl?.remove();
 	cleanupOldHost();
 
-	const shareItem = document
-		.querySelector('.toolbar-left-item-wrap .video-share-wrap')
-		?.closest('.toolbar-left-item-wrap');
+	const shareItem = findShareItem();
 	if (shareItem?.parentNode) {
 		btnEl = createToolbarButton();
 		placement = 'bottom-start';
@@ -143,8 +177,11 @@ function ensureButton(): HTMLElement {
 	}
 	btnLabel = btnEl.querySelector<HTMLElement>('[data-label]');
 	decorate(btnEl);
-	controller();
+	const popupController = controller();
 	updateButtonLabel();
+	// An open popup is anchored to the old, detached button; re-anchor it.
+	if (popupController.isOpen()) popupController.open(btnEl, placement);
+	watchButton();
 	return btnEl;
 }
 
@@ -186,6 +223,9 @@ export function clearLogs(): void {
 
 /** Remove the button and popup, and release any saved-file object URLs. */
 export function cleanup(): void {
+	observer?.disconnect();
+	observer = null;
+	restoreQueued = false;
 	popup?.destroy();
 	tasks?.dispose();
 	popup = null;
