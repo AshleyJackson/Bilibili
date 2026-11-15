@@ -1,6 +1,6 @@
 {
   "name": "bilibili哔哩哔哩下载助手",
-  "version": "3.2.2",
+  "version": "3.3.0",
   "description": "bilibili 哔哩哔哩 B站 下载助手 帮你下载版权受限（能看不能缓存）的 番剧 电影 影视 电视剧 等 视频",
   "content_scripts": [
     {
