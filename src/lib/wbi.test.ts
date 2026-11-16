@@ -5,7 +5,9 @@ import {
 	encodeWbiValue,
 	encWbi,
 	extractKeysFromNav,
-	tryExtractKeysFromPage
+	tryExtractKeysFromPage,
+	fetchWbiKeys,
+	clearWbiKeys
 } from './wbi';
 
 // Documented test vectors from SocialSisterYi/bilibili-API-collect (maintained fork).
@@ -145,5 +147,47 @@ describe('tryExtractKeysFromPage', () => {
 		// window exists but no __INITIAL_STATE__
 		vi.stubGlobal('window', {} as Window & typeof globalThis);
 		expect(tryExtractKeysFromPage()).toBeNull();
+	});
+});
+
+describe('fetchWbiKeys', () => {
+	const navWbiImg = {
+		img_url: 'https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png',
+		sub_url: 'https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png'
+	};
+
+	beforeEach(() => {
+		clearWbiKeys();
+		vi.unstubAllGlobals();
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		clearWbiKeys();
+	});
+
+	it('uses WBI keys included in a logged-out nav response', async () => {
+		vi.stubGlobal('window', {
+			fetch: vi.fn(async () => ({
+				json: async () => ({ code: -101, data: { wbi_img: navWbiImg } })
+			}))
+		} as unknown as Window & typeof globalThis);
+
+		await expect(fetchWbiKeys()).resolves.toEqual({
+			imgKey: IMG_KEY,
+			subKey: SUB_KEY
+		});
+	});
+
+	it('falls back to page state when a logged-out nav response has no keys', async () => {
+		vi.stubGlobal('window', {
+			fetch: vi.fn(async () => ({ json: async () => ({ code: -101 }) })),
+			__INITIAL_STATE__: { wbi_img: navWbiImg }
+		} as unknown as Window & typeof globalThis);
+
+		await expect(fetchWbiKeys()).resolves.toEqual({
+			imgKey: IMG_KEY,
+			subKey: SUB_KEY
+		});
 	});
 });

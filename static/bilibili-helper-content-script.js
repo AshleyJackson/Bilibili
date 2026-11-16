@@ -8479,7 +8479,8 @@ async function fetchWbiKeys(force = false) {
 	});
 	try {
 		const json = await (await window.fetch(NAV_API, FETCH_DEFAULTS)).json();
-		if (json.code !== 0) {
+		const keys = extractKeysFromNav(json.data ?? {});
+		if (json.code !== 0 && !(json.code === -101 && keys)) {
 			logWarn(MODULE$2, "nav API returned non-zero code, trying page fallback", json.code);
 			const fallback = tryExtractKeysFromPage();
 			if (fallback) {
@@ -8491,7 +8492,6 @@ async function fetchWbiKeys(force = false) {
 			}
 			throw new Error(`nav API returned code ${json.code} and no page fallback available`);
 		}
-		const keys = extractKeysFromNav(json.data ?? {});
 		if (!keys) {
 			logWarn(MODULE$2, "failed to extract WBI keys from nav response, trying page fallback", json.data);
 			const fallback = tryExtractKeysFromPage();
