@@ -126,7 +126,10 @@ export async function fetchWbiKeys(force = false): Promise<{ imgKey: string; sub
 		const resp = await window.fetch(NAV_API, FETCH_DEFAULTS);
 		const json: { code: number; data?: { wbi_img?: { img_url?: string; sub_url?: string } } } =
 			await resp.json();
-		if (json.code !== 0) {
+		const keys = extractKeysFromNav(json.data ?? {});
+		// The nav API returns code -101 for logged-out users but still provides
+		// the WBI keys needed to sign public playurl requests.
+		if (json.code !== 0 && !(json.code === -101 && keys)) {
 			logWarn(MODULE, 'nav API returned non-zero code, trying page fallback', json.code);
 			const fallback = tryExtractKeysFromPage();
 			if (fallback) {
@@ -135,7 +138,6 @@ export async function fetchWbiKeys(force = false): Promise<{ imgKey: string; sub
 			}
 			throw new Error(`nav API returned code ${json.code} and no page fallback available`);
 		}
-		const keys = extractKeysFromNav(json.data ?? {});
 		if (!keys) {
 			logWarn(MODULE, 'failed to extract WBI keys from nav response, trying page fallback', json.data);
 			const fallback = tryExtractKeysFromPage();
