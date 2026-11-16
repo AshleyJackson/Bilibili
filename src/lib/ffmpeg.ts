@@ -5,6 +5,7 @@ import { toUint8Array } from './fetch-utils';
 import { logInfo, logError } from './logger';
 
 let ffmpegInstance: FFmpeg | null = null;
+let ffmpegLoadPromise: Promise<FFmpeg> | null = null;
 const usedFiles = new Set<string>();
 const blobUrls = new Set<string>();
 
@@ -13,50 +14,63 @@ export function trackBlobUrl(url: string): void {
 }
 
 async function getFFmpeg(baseUrl: string): Promise<FFmpeg> {
-	if (ffmpegInstance) {
+	if (ffmpegInstance?.loaded) {
 		logInfo('ffmpeg', 'reusing existing FFmpeg instance');
 		return ffmpegInstance;
 	}
-
-	logInfo('ffmpeg', 'initializing new FFmpeg instance');
-	const inst = new FFmpeg();
-	inst.on('log', ({ message }) => {
-		console.log('[bilibili downloader]', '[ffmpeg]', message);
-	});
-
-	// All three assets must use blob URLs because:
-	//   1. The content script runs in the page's main world, so
-	//      new Worker(chrome-extension://...) is blocked.
-	//   2. The worker is created as type:"module", so importScripts()
-	//      is unavailable.  It falls back to import(blobURL), which
-	//      works when all three files are blob URLs with the page's origin.
-	//   3. ffmpeg-core.js must be the ESM build so import() returns a
-	//      module with a default export (createFFmpegCore).
-	logInfo('ffmpeg', 'fetching FFmpeg assets as blobs from', baseUrl);
-	const [workerUrl, coreUrl, wasmUrl] = await Promise.all([
-		fetchAsBlob(`${baseUrl}/${FFMPEG_WORKER}`, 'text/javascript'),
-		fetchAsBlob(`${baseUrl}/${FFMPEG_CORE_JS}`, 'text/javascript'),
-		fetchAsBlob(`${baseUrl}/${FFMPEG_CORE_WASM}`, 'application/wasm')
-	]);
-	trackBlobUrl(workerUrl);
-	trackBlobUrl(coreUrl);
-	trackBlobUrl(wasmUrl);
-
-	logInfo('ffmpeg', 'FFmpeg blobs ready, loading...');
-	try {
-		await inst.load({
-			classWorkerURL: workerUrl,
-			coreURL: coreUrl,
-			wasmURL: wasmUrl
-		});
-		logInfo('ffmpeg', 'FFmpeg loaded successfully');
-	} catch (err) {
-		logError('ffmpeg', 'FFmpeg load failed', err);
-		throw err;
+	if (ffmpegLoadPromise) {
+		logInfo('ffmpeg', 'waiting for FFmpeg instance to load');
+		return ffmpegLoadPromise;
 	}
 
-	ffmpegInstance = inst;
-	return inst;
+	ffmpegInstance = null;
+	const loadPromise = (async () => {
+		logInfo('ffmpeg', 'initializing new FFmpeg instance');
+		const inst = new FFmpeg();
+		inst.on('log', ({ message }) => {
+			console.log('[bilibili downloader]', '[ffmpeg]', message);
+		});
+
+		// All three assets must use blob URLs because:
+		//   1. The content script runs in the page's main world, so
+		//      new Worker(chrome-extension://...) is blocked.
+		//   2. The worker is created as type:"module", so importScripts()
+		//      is unavailable.  It falls back to import(blobURL), which
+		//      works when all three files are blob URLs with the page's origin.
+		//   3. ffmpeg-core.js must be the ESM build so import() returns a
+		//      module with a default export (createFFmpegCore).
+		logInfo('ffmpeg', 'fetching FFmpeg assets as blobs from', baseUrl);
+		const [workerUrl, coreUrl, wasmUrl] = await Promise.all([
+			fetchAsBlob(`${baseUrl}/${FFMPEG_WORKER}`, 'text/javascript'),
+			fetchAsBlob(`${baseUrl}/${FFMPEG_CORE_JS}`, 'text/javascript'),
+			fetchAsBlob(`${baseUrl}/${FFMPEG_CORE_WASM}`, 'application/wasm')
+		]);
+		trackBlobUrl(workerUrl);
+		trackBlobUrl(coreUrl);
+		trackBlobUrl(wasmUrl);
+
+		logInfo('ffmpeg', 'FFmpeg blobs ready, loading...');
+		try {
+			await inst.load({
+				classWorkerURL: workerUrl,
+				coreURL: coreUrl,
+				wasmURL: wasmUrl
+			});
+			logInfo('ffmpeg', 'FFmpeg loaded successfully');
+		} catch (err) {
+			logError('ffmpeg', 'FFmpeg load failed', err);
+			throw err;
+		}
+
+		ffmpegInstance = inst;
+		return inst;
+	})();
+	ffmpegLoadPromise = loadPromise;
+	try {
+		return await loadPromise;
+	} finally {
+		if (ffmpegLoadPromise === loadPromise) ffmpegLoadPromise = null;
+	}
 }
 
 /**
