@@ -65,16 +65,18 @@ describe('mergeAudioVideo', () => {
 		expect(data.byteLength).toBe(2);
 	});
 
-	it('reloads FFmpeg after its worker has been terminated', async () => {
-		ffmpegMock.terminate();
+	it('reloads FFmpeg after its cached worker has been terminated', async () => {
 		const audio = new Blob([new Uint8Array([1])]);
 		const video = new Blob([new Uint8Array([2])]);
 
 		await mergeAudioVideo('chrome-extension://extension-id', audio, video);
+		const loadCountBeforeTermination = ffmpegMock.load.mock.calls.length;
+		ffmpegMock.terminate();
+		await mergeAudioVideo('chrome-extension://extension-id', audio, video);
 
 		expect(ffmpegMock.terminate).toHaveBeenCalledOnce();
-		expect(ffmpegMock.load).toHaveBeenCalledOnce();
-		expect(ffmpegMock.writeFile).toHaveBeenCalledTimes(2);
+		expect(ffmpegMock.load).toHaveBeenCalledTimes(loadCountBeforeTermination + 1);
+		expect(ffmpegMock.writeFile).toHaveBeenCalledTimes(4);
 	});
 
 	it('shares a single FFmpeg load across concurrent merges', async () => {
