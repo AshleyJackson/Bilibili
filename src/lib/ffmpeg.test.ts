@@ -4,12 +4,18 @@ import { mergeAudioVideo } from './ffmpeg';
 
 const ffmpegMock = vi.hoisted(() => ({
 	on: vi.fn(),
-	load: vi.fn(),
+	load: vi.fn(async () => {
+		ffmpegMock.loaded = true;
+		return true;
+	}),
 	writeFile: vi.fn(),
 	exec: vi.fn(),
 	readFile: vi.fn(),
 	deleteFile: vi.fn(),
-	terminate: vi.fn()
+	terminate: vi.fn(() => {
+		ffmpegMock.loaded = false;
+	}),
+	loaded: false
 }));
 
 vi.mock('@ffmpeg/ffmpeg', () => ({
@@ -33,8 +39,13 @@ vi.mock('./logger', () => ({
 
 beforeEach(() => {
 	vi.clearAllMocks();
-	ffmpegMock.load.mockResolvedValue(true);
-	ffmpegMock.writeFile.mockResolvedValue(undefined);
+	ffmpegMock.load.mockImplementation(async () => {
+		ffmpegMock.loaded = true;
+		return true;
+	});
+	ffmpegMock.writeFile.mockImplementation(async () => {
+		if (!ffmpegMock.loaded) throw new Error('ffmpeg is not loaded, call `await ffmpeg.load()` first');
+	});
 	ffmpegMock.exec.mockResolvedValue(undefined);
 	ffmpegMock.readFile.mockResolvedValue(new Uint8Array([7, 8]));
 	ffmpegMock.deleteFile.mockResolvedValue(undefined);
@@ -52,6 +63,43 @@ describe('mergeAudioVideo', () => {
 		expect(Array.from(writes[1][1])).toEqual([3, 4]);
 		expect(ffmpegMock.exec).toHaveBeenCalledOnce();
 		expect(data.byteLength).toBe(2);
+	});
+
+	it('reloads FFmpeg after its cached worker has been terminated', async () => {
+		const audio = new Blob([new Uint8Array([1])]);
+		const video = new Blob([new Uint8Array([2])]);
+
+		await mergeAudioVideo('chrome-extension://extension-id', audio, video);
+		const loadCountBeforeTermination = ffmpegMock.load.mock.calls.length;
+		ffmpegMock.terminate();
+		await mergeAudioVideo('chrome-extension://extension-id', audio, video);
+
+		expect(ffmpegMock.terminate).toHaveBeenCalledOnce();
+		expect(ffmpegMock.load).toHaveBeenCalledTimes(loadCountBeforeTermination + 1);
+		expect(ffmpegMock.writeFile).toHaveBeenCalledTimes(4);
+	});
+
+	it('shares a single FFmpeg load across concurrent merges', async () => {
+		ffmpegMock.loaded = false;
+		let finishLoad!: () => void;
+		const loadGate = new Promise<void>((resolve) => {
+			finishLoad = resolve;
+		});
+		ffmpegMock.load.mockImplementationOnce(async () => {
+			await loadGate;
+			ffmpegMock.loaded = true;
+			return true;
+		});
+		const audio = new Blob([new Uint8Array([1])]);
+		const video = new Blob([new Uint8Array([2])]);
+		const firstMerge = mergeAudioVideo('chrome-extension://extension-id', audio, video);
+		const secondMerge = mergeAudioVideo('chrome-extension://extension-id', audio, video);
+
+		await vi.waitFor(() => expect(ffmpegMock.load).toHaveBeenCalledOnce());
+		finishLoad();
+		await Promise.all([firstMerge, secondMerge]);
+
+		expect(ffmpegMock.load).toHaveBeenCalledOnce();
 	});
 
 	it('surfaces failed Blob reads with a stable error and no input details', async () => {

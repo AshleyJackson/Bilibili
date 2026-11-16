@@ -4716,44 +4716,58 @@ async function toUint8Array(input) {
 //#endregion
 //#region src/lib/ffmpeg.ts
 var ffmpegInstance = null;
+var ffmpegLoadPromise = null;
 var usedFiles = /* @__PURE__ */ new Set();
 var blobUrls = /* @__PURE__ */ new Set();
 function trackBlobUrl(url) {
 	blobUrls.add(url);
 }
 async function getFFmpeg(baseUrl) {
-	if (ffmpegInstance) {
+	if (ffmpegInstance?.loaded) {
 		logInfo("ffmpeg", "reusing existing FFmpeg instance");
 		return ffmpegInstance;
 	}
-	logInfo("ffmpeg", "initializing new FFmpeg instance");
-	const inst = new FFmpeg();
-	inst.on("log", ({ message }) => {
-		console.log("[bilibili downloader]", "[ffmpeg]", message);
-	});
-	logInfo("ffmpeg", "fetching FFmpeg assets as blobs from", baseUrl);
-	const [workerUrl, coreUrl, wasmUrl] = await Promise.all([
-		fetchAsBlob(`${baseUrl}/${FFMPEG_WORKER}`, "text/javascript"),
-		fetchAsBlob(`${baseUrl}/${FFMPEG_CORE_JS}`, "text/javascript"),
-		fetchAsBlob(`${baseUrl}/${FFMPEG_CORE_WASM}`, "application/wasm")
-	]);
-	trackBlobUrl(workerUrl);
-	trackBlobUrl(coreUrl);
-	trackBlobUrl(wasmUrl);
-	logInfo("ffmpeg", "FFmpeg blobs ready, loading...");
-	try {
-		await inst.load({
-			classWorkerURL: workerUrl,
-			coreURL: coreUrl,
-			wasmURL: wasmUrl
-		});
-		logInfo("ffmpeg", "FFmpeg loaded successfully");
-	} catch (err) {
-		logError("ffmpeg", "FFmpeg load failed", err);
-		throw err;
+	if (ffmpegLoadPromise) {
+		logInfo("ffmpeg", "waiting for FFmpeg instance to load");
+		return ffmpegLoadPromise;
 	}
-	ffmpegInstance = inst;
-	return inst;
+	ffmpegInstance = null;
+	const loadPromise = (async () => {
+		logInfo("ffmpeg", "initializing new FFmpeg instance");
+		const inst = new FFmpeg();
+		inst.on("log", ({ message }) => {
+			console.log("[bilibili downloader]", "[ffmpeg]", message);
+		});
+		logInfo("ffmpeg", "fetching FFmpeg assets as blobs from", baseUrl);
+		const [workerUrl, coreUrl, wasmUrl] = await Promise.all([
+			fetchAsBlob(`${baseUrl}/${FFMPEG_WORKER}`, "text/javascript"),
+			fetchAsBlob(`${baseUrl}/${FFMPEG_CORE_JS}`, "text/javascript"),
+			fetchAsBlob(`${baseUrl}/${FFMPEG_CORE_WASM}`, "application/wasm")
+		]);
+		trackBlobUrl(workerUrl);
+		trackBlobUrl(coreUrl);
+		trackBlobUrl(wasmUrl);
+		logInfo("ffmpeg", "FFmpeg blobs ready, loading...");
+		try {
+			await inst.load({
+				classWorkerURL: workerUrl,
+				coreURL: coreUrl,
+				wasmURL: wasmUrl
+			});
+			logInfo("ffmpeg", "FFmpeg loaded successfully");
+		} catch (err) {
+			logError("ffmpeg", "FFmpeg load failed", err);
+			throw err;
+		}
+		ffmpegInstance = inst;
+		return inst;
+	})();
+	ffmpegLoadPromise = loadPromise;
+	try {
+		return await loadPromise;
+	} finally {
+		if (ffmpegLoadPromise === loadPromise) ffmpegLoadPromise = null;
+	}
 }
 /**
 * Merge audio and video using FFmpeg, return the merged data buffer.
