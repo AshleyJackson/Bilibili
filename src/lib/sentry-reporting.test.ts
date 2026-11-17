@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+	contentScriptReleaseFromStack,
 	createSentryReportRateLimiter,
 	createSentryErrorMessage,
 	dispatchContentScriptError,
@@ -11,6 +12,31 @@ import {
 	SENTRY_REPORT_RATE_LIMITS,
 	SENTRY_ERROR_MESSAGE_TYPE
 } from './sentry-reporting';
+
+describe('contentScriptReleaseFromStack', () => {
+	const extensionId = 'a'.repeat(32);
+
+	it('uses the script URL version instead of the current worker version', () => {
+		const stack = `TypeError: failed\n    at L (chrome-extension://${extensionId}/bilibili-helper-content-script.js?v=3.0.4:176:50)`;
+
+		expect(contentScriptReleaseFromStack(stack, extensionId)).toBe('bilibili-extension@3.0.4');
+	});
+
+	it('ignores stacks from a different extension or without a versioned script URL', () => {
+		expect(
+			contentScriptReleaseFromStack(
+				' at L (chrome-extension://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/bilibili-helper-content-script.js?v=3.0.4:176:50)',
+				extensionId
+			)
+		).toBeUndefined();
+		expect(
+			contentScriptReleaseFromStack(
+				` at L (chrome-extension://${extensionId}/bilibili-helper-content-script.js:176:50)`,
+				extensionId
+			)
+		).toBeUndefined();
+	});
+});
 
 describe('serializeSentryError', () => {
 	it('keeps the error name, message, and stack', () => {

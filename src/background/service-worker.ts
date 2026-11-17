@@ -1,5 +1,6 @@
 import * as Sentry from '@sentry/browser';
 import {
+	contentScriptReleaseFromStack,
 	createSentryReportRateLimiter,
 	isSentryErrorMessage,
 	sanitizeSentryEvent,
@@ -57,6 +58,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 	Sentry.withScope((scope) => {
 		scope.setTag('source', message.source);
 		if (message.module) scope.setTag('module', message.module);
+		const scriptRelease =
+			message.source === 'content-script'
+				? contentScriptReleaseFromStack(message.error.stack, chrome.runtime.id)
+				: undefined;
+		if (scriptRelease) {
+			scope.addEventProcessor((event) => {
+				event.release = scriptRelease;
+				return event;
+			});
+		}
 
 		const error = new Error(message.error.message);
 		error.name = message.error.name;

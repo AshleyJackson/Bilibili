@@ -12,6 +12,7 @@ export function createSentryPlugins(enabled: boolean, assets: string[], mapsToDe
 		org,
 		project,
 		authToken,
+		release: process.env.RELEASE_VERSION ? { name: `bilibili-extension@${process.env.RELEASE_VERSION}` } : undefined,
 		telemetry: false,
 		sourcemaps: {
 			assets,
