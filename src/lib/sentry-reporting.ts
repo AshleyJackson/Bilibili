@@ -3,6 +3,21 @@ export const CONTENT_SCRIPT_ERROR_EVENT = 'bilibili-helper:sentry-page-error';
 
 export type SentryErrorSource = 'content-script' | 'extension-popup';
 
+const CONTENT_SCRIPT_FILENAME = 'bilibili-helper-content-script.js';
+
+/** Resolve the release that produced a page-world content-script stack. */
+export function contentScriptReleaseFromStack(stack: string | undefined, extensionId: string): string | undefined {
+	if (!stack || !extensionId) return undefined;
+
+	const escapedExtensionId = extensionId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const match = stack.match(
+		new RegExp(
+			`chrome-extension://${escapedExtensionId}/${CONTENT_SCRIPT_FILENAME.replaceAll('.', '\\.')}\\?v=(\\d+(?:\\.\\d+){1,3})(?=[&):\\s]|$)`
+		)
+	);
+	return match ? `bilibili-extension@${match[1]}` : undefined;
+}
+
 export const SENTRY_REPORT_RATE_LIMITS: Readonly<Record<SentryErrorSource, number>> = {
 	'content-script': 5,
 	'extension-popup': 20
