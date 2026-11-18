@@ -159,7 +159,13 @@ export async function fetchUgcPlayUrl(
 			logWarn(MODULE, 'WBI key refresh triggered by risk-control error');
 			clearWbiKeys();
 		}
-		const signed = await signWbi(params);
+		let signed: Record<string, string>;
+		try {
+			signed = await signWbi(params);
+		} catch (err) {
+			logWarn(MODULE, 'fetchUgcPlayUrl WBI signing failed', err);
+			return { code: ErrorCode.FAILED_TO_FETCH, message: '网络请求失败' };
+		}
 		const url = `${UGC_PLAY_URL_API}?${new URLSearchParams(signed).toString()}`;
 		const done = logFetch(MODULE, url, 'GET');
 		let response: Response;

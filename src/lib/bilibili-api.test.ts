@@ -4,6 +4,7 @@ import { fetchUgcPlayUrl, fetchBangumiPlayUrl } from './bilibili-api';
 import { UGC_PLAY_URL_API, BANGUMI_PLAY_URL_API } from './constants';
 import { ErrorCode } from './schemas';
 import type { DashData } from './schemas';
+import { clearWbiKeys } from './wbi';
 
 // Sample DASH response data shared by both endpoints.
 const sampleDash: DashData = {
@@ -73,6 +74,7 @@ function setCookie(cookie: string): void {
 describe('fetchUgcPlayUrl', () => {
 	beforeEach(() => {
 		setCookie('SESSDATA=abc123');
+		clearWbiKeys();
 	});
 
 	it('calls the WBI playurl endpoint and includes w_rid + wts', async () => {
@@ -145,6 +147,22 @@ describe('fetchUgcPlayUrl', () => {
 		const result = await fetchUgcPlayUrl(12345, undefined, 67890, 120);
 		expect(result.code).toBe(-10403);
 		expect(result.message).toContain('大会员');
+	});
+
+	it('returns FAILED_TO_FETCH when WBI key fetching fails', async () => {
+		const calls = mockFetch((url) => {
+			if (url.includes('/nav')) throw new TypeError('Failed to fetch');
+			return makeUgcResponse();
+		});
+		Object.defineProperty(window, '__INITIAL_STATE__', { configurable: true, value: undefined });
+
+		const result = await fetchUgcPlayUrl(12345, undefined, 67890, 120);
+
+		expect(result).toEqual({
+			code: ErrorCode.FAILED_TO_FETCH,
+			message: '网络请求失败'
+		});
+		expect(calls).toHaveLength(1);
 	});
 
 	it.each([
