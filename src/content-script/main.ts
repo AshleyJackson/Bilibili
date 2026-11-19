@@ -15,6 +15,7 @@ import { fetchUgcPlayUrl, fetchBangumiPlayUrl } from '$lib/bilibili-api';
 import type { PlayUrlResult } from '$lib/bilibili-api';
 import { logInfo, logWarn, logError } from '$lib/logger';
 import { dispatchContentScriptError } from '$lib/sentry-reporting';
+import { readNext2025BangumiInfo } from '$lib/bangumi-state';
 
 const MODULE = 'main';
 
@@ -389,12 +390,25 @@ async function processBangumiPage(videoInfo?: BangumiVideoInfo | null): Promise<
 	let episodes: Array<{ ep_id: number; title?: string; titleFormat?: string; long_title?: string; share_copy?: string }> = [];
 	let episodeInfo: { episode_id: number; index_title: string; long_title: string } | null = null;
 	let mediaTitle = '';
+	let next2025Cid: number | undefined;
 
 	if (isNext2025) {
-		const data = state.data as {
-			result: { supplement: { ogv_episode_info: { episode_id: number; index_title: string; long_title: string } } };
+		const next2025Info = readNext2025BangumiInfo(state.data);
+		if (!next2025Info) {
+			logWarn(MODULE, 'processBangumiPage: invalid next2025 episode state');
+			showDownloadInfo({
+				code: ErrorCode.INVALID_RESPONSE,
+				message: '未能获取番剧分集信息',
+				quality: QUALITY_LABELS[quality] ?? ''
+			});
+			return;
+		}
+		episodeInfo = {
+			episode_id: next2025Info.episodeId,
+			index_title: next2025Info.indexTitle,
+			long_title: next2025Info.longTitle
 		};
-		episodeInfo = data.result.supplement.ogv_episode_info;
+		next2025Cid = next2025Info.cid;
 		mediaTitle = document.title.split('-')?.[0]?.trim() ?? '';
 		logInfo(MODULE, 'next2025 episode info', { episodeId: episodeInfo?.episode_id, mediaTitle });
 	} else {
@@ -416,10 +430,7 @@ async function processBangumiPage(videoInfo?: BangumiVideoInfo | null): Promise<
 	// Determine the cid to use. Prefer the intercepted XHR info, then the page state.
 	let cid: number | undefined = videoInfo?.cid;
 	if (cid === undefined && isNext2025) {
-		const nextData = state.data as {
-			result: { arc: { cid: number }; video_info: { dash?: DashData; durl?: DurlSegment[] } };
-		};
-		cid = nextData.result.arc.cid;
+		cid = next2025Cid;
 		logInfo(MODULE, 'cid from next2025 arc', { cid });
 	}
 

@@ -8766,6 +8766,26 @@ async function fetchBangumiPlayUrl(epId, cid, quality = 120) {
 	};
 }
 //#endregion
+//#region src/lib/bangumi-state.ts
+function readNext2025BangumiInfo(data) {
+	if (typeof data !== "object" || data === null) return null;
+	const result = data.result;
+	if (typeof result !== "object" || result === null) return null;
+	const { supplement, arc } = result;
+	if (typeof supplement !== "object" || supplement === null || typeof arc !== "object" || arc === null) return null;
+	const episodeInfo = supplement.ogv_episode_info;
+	if (typeof episodeInfo !== "object" || episodeInfo === null) return null;
+	const { episode_id: episodeId, index_title: indexTitle, long_title: longTitle } = episodeInfo;
+	const cid = arc.cid;
+	if (typeof episodeId !== "number" || !Number.isFinite(episodeId) || episodeId <= 0 || typeof cid !== "number" || !Number.isFinite(cid) || cid <= 0) return null;
+	return {
+		episodeId,
+		cid,
+		indexTitle: typeof indexTitle === "string" ? indexTitle : "",
+		longTitle: typeof longTitle === "string" ? longTitle : ""
+	};
+}
+//#endregion
 //#region src/content-script/main.ts
 var MODULE = "main";
 window.addEventListener("error", (event) => {
@@ -9088,8 +9108,24 @@ async function processBangumiPage(videoInfo) {
 	let episodes = [];
 	let episodeInfo = null;
 	let mediaTitle = "";
+	let next2025Cid;
 	if (isNext2025) {
-		episodeInfo = state.data.result.supplement.ogv_episode_info;
+		const next2025Info = readNext2025BangumiInfo(state.data);
+		if (!next2025Info) {
+			logWarn(MODULE, "processBangumiPage: invalid next2025 episode state");
+			showDownloadInfo({
+				code: ErrorCode.INVALID_RESPONSE,
+				message: "未能获取番剧分集信息",
+				quality: QUALITY_LABELS[quality] ?? ""
+			});
+			return;
+		}
+		episodeInfo = {
+			episode_id: next2025Info.episodeId,
+			index_title: next2025Info.indexTitle,
+			long_title: next2025Info.longTitle
+		};
+		next2025Cid = next2025Info.cid;
 		mediaTitle = document.title.split("-")?.[0]?.trim() ?? "";
 		logInfo(MODULE, "next2025 episode info", {
 			episodeId: episodeInfo?.episode_id,
@@ -9116,7 +9152,7 @@ async function processBangumiPage(videoInfo) {
 	});
 	let cid = videoInfo?.cid;
 	if (cid === void 0 && isNext2025) {
-		cid = state.data.result.arc.cid;
+		cid = next2025Cid;
 		logInfo(MODULE, "cid from next2025 arc", { cid });
 	}
 	let result;
