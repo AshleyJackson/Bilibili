@@ -23,6 +23,7 @@ if (dsn) {
 		dsn,
 		release: `bilibili-extension@${chrome.runtime.getManifest().version}`,
 		environment: import.meta.env.DEV ? 'development' : 'production',
+		maxBreadcrumbs: 20,
 		dataCollection: {
 			userInfo: false,
 			cookies: false,
@@ -31,7 +32,6 @@ if (dsn) {
 			urlQueryParams: false,
 			stackFrameVariables: false
 		},
-		maxBreadcrumbs: 0,
 		beforeSend: (event) => sanitizeSentryEvent(event)
 	});
 }
@@ -58,6 +58,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 	Sentry.withScope((scope) => {
 		scope.setTag('source', message.source);
 		if (message.module) scope.setTag('module', message.module);
+		for (const breadcrumb of message.breadcrumbs ?? []) {
+			scope.addBreadcrumb({
+				category: breadcrumb.category,
+				message: breadcrumb.message,
+				timestamp: breadcrumb.timestamp,
+				level: 'info'
+			});
+		}
 		const scriptRelease =
 			message.source === 'content-script'
 				? contentScriptReleaseFromStack(message.error.stack, chrome.runtime.id)

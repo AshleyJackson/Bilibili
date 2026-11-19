@@ -26,10 +26,23 @@ describe('createSentryPlugins', () => {
 		vi.stubEnv('SENTRY_AUTH_TOKEN', 'unit-test-token');
 		vi.stubEnv('RELEASE_VERSION', '3.3.4');
 
-		expect(createSentryPlugins(true, [], []).length).toBeGreaterThan(0);
+		const legacySourcemapPaths = [
+			'./static/bilibili-helper-content-script.js',
+			'./static/bilibili-helper-content-script.js.map',
+			'./static/assets'
+		];
+
+		expect(createSentryPlugins(true, [], [], legacySourcemapPaths).length).toBeGreaterThan(0);
 		expect(sentryVitePluginMock).toHaveBeenCalledWith(
 			expect.objectContaining({
-				release: { name: 'bilibili-extension@3.3.4' }
+				release: {
+					name: 'bilibili-extension@3.3.4',
+					uploadLegacySourcemaps: {
+						paths: legacySourcemapPaths,
+						urlPrefix: '~/',
+						ext: ['js', 'map']
+					}
+				}
 			})
 		);
 	});

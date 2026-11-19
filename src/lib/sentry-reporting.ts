@@ -3,7 +3,61 @@ export const CONTENT_SCRIPT_ERROR_EVENT = 'bilibili-helper:sentry-page-error';
 
 export type SentryErrorSource = 'content-script' | 'extension-popup';
 
+export const MAX_SENTRY_BREADCRUMBS = 20;
+export const SENTRY_BREADCRUMB_MESSAGES = [
+	'FFmpeg merge started',
+	'FFmpeg ready',
+	'Reading audio data',
+	'Audio data read',
+	'Reading video data',
+	'Video data read',
+	'FFmpeg inputs written',
+	'FFmpeg command started',
+	'FFmpeg command completed',
+	'Reading merged output',
+	'Merged output read'
+] as const;
+
+export type SentryBreadcrumbMessage = (typeof SENTRY_BREADCRUMB_MESSAGES)[number];
+
+export interface SentryErrorBreadcrumb {
+	category: 'ffmpeg';
+	message: SentryBreadcrumbMessage;
+	timestamp: number;
+}
+
+const sentryBreadcrumbMessageSet: ReadonlySet<string> = new Set(SENTRY_BREADCRUMB_MESSAGES);
+const pendingSentryBreadcrumbs: SentryErrorBreadcrumb[] = [];
 const CONTENT_SCRIPT_FILENAME = 'bilibili-helper-content-script.js';
+
+export function recordSentryBreadcrumb(message: SentryBreadcrumbMessage): void {
+	if (!sentryBreadcrumbMessageSet.has(message)) return;
+
+	pendingSentryBreadcrumbs.push({
+		category: 'ffmpeg',
+		message,
+		timestamp: Date.now() / 1000
+	});
+	if (pendingSentryBreadcrumbs.length > MAX_SENTRY_BREADCRUMBS) {
+		pendingSentryBreadcrumbs.shift();
+	}
+}
+
+function takeSentryBreadcrumbs(): SentryErrorBreadcrumb[] {
+	return pendingSentryBreadcrumbs.splice(0, pendingSentryBreadcrumbs.length);
+}
+
+function isSentryErrorBreadcrumb(value: unknown): value is SentryErrorBreadcrumb {
+	if (!value || typeof value !== 'object') return false;
+	const breadcrumb = value as Record<string, unknown>;
+	return (
+		breadcrumb.category === 'ffmpeg' &&
+		typeof breadcrumb.message === 'string' &&
+		sentryBreadcrumbMessageSet.has(breadcrumb.message) &&
+		typeof breadcrumb.timestamp === 'number' &&
+		Number.isFinite(breadcrumb.timestamp)
+	);
+}
 
 /** Resolve the release that produced a page-world content-script stack. */
 export function contentScriptReleaseFromStack(stack: string | undefined, extensionId: string): string | undefined {
@@ -35,6 +89,7 @@ export interface SentryErrorMessage {
 	source: SentryErrorSource;
 	module?: string;
 	error: SerializedSentryError;
+	breadcrumbs?: SentryErrorBreadcrumb[];
 }
 
 interface ReportRateWindow {
@@ -100,11 +155,13 @@ export function createSentryErrorMessage(
 	source: SentryErrorSource,
 	module?: string
 ): SentryErrorMessage {
+	const breadcrumbs = source === 'content-script' ? takeSentryBreadcrumbs() : [];
 	return {
 		type: SENTRY_ERROR_MESSAGE_TYPE,
 		source,
 		...(module && MODULE_PATTERN.test(module) ? { module } : {}),
-		error: serializeSentryError(error)
+		error: serializeSentryError(error),
+		...(breadcrumbs.length > 0 ? { breadcrumbs } : {})
 	};
 }
 
@@ -120,6 +177,15 @@ export function isSentryErrorMessage(value: unknown): value is SentryErrorMessag
 	}
 
 	if (message.module !== undefined && (typeof message.module !== 'string' || !MODULE_PATTERN.test(message.module))) {
+		return false;
+	}
+
+	if (
+		message.breadcrumbs !== undefined &&
+		(!Array.isArray(message.breadcrumbs) ||
+			message.breadcrumbs.length > MAX_SENTRY_BREADCRUMBS ||
+			!message.breadcrumbs.every(isSentryErrorBreadcrumb))
+	) {
 		return false;
 	}
 
@@ -141,6 +207,14 @@ function redactExternalUrls(value: string): string {
 	return value.replace(/https?:\/\/[^\s"'<>]+/gi, '[external URL]');
 }
 
+function sanitizeSentryBreadcrumbs(value: unknown): SentryErrorBreadcrumb[] {
+	if (!Array.isArray(value)) return [];
+	return value
+		.filter(isSentryErrorBreadcrumb)
+		.slice(-MAX_SENTRY_BREADCRUMBS)
+		.map(({ category, message, timestamp }) => ({ category, message, timestamp }));
+}
+
 export function sanitizeSentryEvent<T>(event: T): T {
 	if (!event || typeof event !== 'object') return event;
 
@@ -148,7 +222,7 @@ export function sanitizeSentryEvent<T>(event: T): T {
 	delete record.request;
 	delete record.user;
 	delete record.extra;
-	record.breadcrumbs = [];
+	record.breadcrumbs = sanitizeSentryBreadcrumbs(record.breadcrumbs);
 
 	if (typeof record.message === 'string') {
 		record.message = redactExternalUrls(record.message);

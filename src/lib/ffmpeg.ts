@@ -3,6 +3,7 @@ import { FFMPEG_WORKER, FFMPEG_CORE_JS, FFMPEG_CORE_WASM } from './constants';
 import { fetchAsBlob } from './fetch-utils';
 import { toUint8Array } from './fetch-utils';
 import { logInfo, logError } from './logger';
+import { recordSentryBreadcrumb } from './sentry-reporting';
 
 let ffmpegInstance: FFmpeg | null = null;
 let ffmpegLoadPromise: Promise<FFmpeg> | null = null;
@@ -77,23 +78,36 @@ async function getFFmpeg(baseUrl: string): Promise<FFmpeg> {
  * Merge audio and video using FFmpeg, return the merged data buffer.
  */
 export async function mergeAudioVideo(baseUrl: string, audio: Blob, video: Blob): Promise<[ArrayBuffer, () => void]> {
+	recordSentryBreadcrumb('FFmpeg merge started');
 	logInfo('ffmpeg', 'mergeAudioVideo: starting merge');
 	const ffmpeg = await getFFmpeg(baseUrl);
+	recordSentryBreadcrumb('FFmpeg ready');
 	const ts = `${Date.now()}${Math.random()}`;
 	const audioFile = `${ts}_audio.mp4`;
 	const videoFile = `${ts}_video.mp4`;
 	const mergedFile = `${ts}_merged.mp4`;
 
 	logInfo('ffmpeg', `writing audio file (${audioFile})`);
-	await ffmpeg.writeFile(audioFile, await toUint8Array(audio));
+	recordSentryBreadcrumb('Reading audio data');
+	const audioData = await toUint8Array(audio);
+	recordSentryBreadcrumb('Audio data read');
+	await ffmpeg.writeFile(audioFile, audioData);
 	logInfo('ffmpeg', `writing video file (${videoFile})`);
-	await ffmpeg.writeFile(videoFile, await toUint8Array(video));
+	recordSentryBreadcrumb('Reading video data');
+	const videoData = await toUint8Array(video);
+	recordSentryBreadcrumb('Video data read');
+	await ffmpeg.writeFile(videoFile, videoData);
+	recordSentryBreadcrumb('FFmpeg inputs written');
 
 	logInfo('ffmpeg', 'executing ffmpeg merge command');
+	recordSentryBreadcrumb('FFmpeg command started');
 	await ffmpeg.exec(['-i', videoFile, '-i', audioFile, '-vcodec', 'copy', '-acodec', 'copy', mergedFile]);
+	recordSentryBreadcrumb('FFmpeg command completed');
 	logInfo('ffmpeg', `ffmpeg merge complete, reading ${mergedFile}`);
 
+	recordSentryBreadcrumb('Reading merged output');
 	const data = await ffmpeg.readFile(mergedFile);
+	recordSentryBreadcrumb('Merged output read');
 	logInfo('ffmpeg', 'merge result size', (data as unknown as ArrayBuffer).byteLength);
 
 	const cleanup = (): void => {
@@ -109,25 +123,31 @@ export async function mergeAudioVideo(baseUrl: string, audio: Blob, video: Blob)
  * Cleanup FFmpeg resources on page unload.
  */
 export function setupCleanup(): void {
-	window.addEventListener('beforeunload', async () => {
-		logInfo('ffmpeg', 'cleanup on beforeunload');
-		await Promise.all([
-			...Array.from(usedFiles).map((f) =>
-				ffmpegInstance?.deleteFile(f).catch(() => {}) ?? Promise.resolve()
-			),
-			...Array.from(blobUrls).map((url) => {
-				try {
-					URL.revokeObjectURL(url);
-				} catch { /* ignore */ }
-				return Promise.resolve();
-			}),
-			new Promise<void>((resolve) => {
-				try {
-					ffmpegInstance?.terminate();
-					logInfo('ffmpeg', 'FFmpeg instance terminated');
-				} catch { /* ignore */ }
-				resolve();
-			})
-		]);
-	}, true);
+	window.addEventListener(
+		'beforeunload',
+		async () => {
+			logInfo('ffmpeg', 'cleanup on beforeunload');
+			await Promise.all([
+				...Array.from(usedFiles).map((f) => ffmpegInstance?.deleteFile(f).catch(() => {}) ?? Promise.resolve()),
+				...Array.from(blobUrls).map((url) => {
+					try {
+						URL.revokeObjectURL(url);
+					} catch {
+						/* ignore */
+					}
+					return Promise.resolve();
+				}),
+				new Promise<void>((resolve) => {
+					try {
+						ffmpegInstance?.terminate();
+						logInfo('ffmpeg', 'FFmpeg instance terminated');
+					} catch {
+						/* ignore */
+					}
+					resolve();
+				})
+			]);
+		},
+		true
+	);
 }
