@@ -2,6 +2,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { mergeAudioVideo } from './ffmpeg';
 
+const sentryMock = vi.hoisted(() => ({
+	recordSentryBreadcrumb: vi.fn()
+}));
+
 const ffmpegMock = vi.hoisted(() => ({
 	on: vi.fn(),
 	load: vi.fn(async () => {
@@ -37,6 +41,8 @@ vi.mock('./logger', () => ({
 	logError: vi.fn()
 }));
 
+vi.mock('./sentry-reporting', () => sentryMock);
+
 beforeEach(() => {
 	vi.clearAllMocks();
 	ffmpegMock.load.mockImplementation(async () => {
@@ -63,6 +69,19 @@ describe('mergeAudioVideo', () => {
 		expect(Array.from(writes[1][1])).toEqual([3, 4]);
 		expect(ffmpegMock.exec).toHaveBeenCalledOnce();
 		expect(data.byteLength).toBe(2);
+		expect(sentryMock.recordSentryBreadcrumb.mock.calls.map(([message]) => message)).toEqual([
+			'FFmpeg merge started',
+			'FFmpeg ready',
+			'Reading audio data',
+			'Audio data read',
+			'Reading video data',
+			'Video data read',
+			'FFmpeg inputs written',
+			'FFmpeg command started',
+			'FFmpeg command completed',
+			'Reading merged output',
+			'Merged output read'
+		]);
 	});
 
 	it('reloads FFmpeg after its cached worker has been terminated', async () => {
@@ -110,5 +129,10 @@ describe('mergeAudioVideo', () => {
 			'Unable to read file data. Please try the download again.'
 		);
 		expect(ffmpegMock.writeFile).not.toHaveBeenCalled();
+		expect(sentryMock.recordSentryBreadcrumb.mock.calls.map(([message]) => message)).toEqual([
+			'FFmpeg merge started',
+			'FFmpeg ready',
+			'Reading audio data'
+		]);
 	});
 });

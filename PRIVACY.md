@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Last updated:** November 15, 2026
+**Last updated:** November 19, 2026
 
 ## Overview
 
@@ -15,6 +15,8 @@ bilibili哔哩哔哩下载助手 ("the Extension") is a Chrome extension that al
 - We do not collect cookies or authentication tokens
 - We do not track user behavior or analytics
 - We do not use any third-party analytics or tracking services
+
+Runtime error reports sent to Sentry may include up to 20 recent, fixed-label FFmpeg processing steps. These diagnostic breadcrumbs contain no video or page URLs, filenames, titles, page content, or request data, and are sent only with an error report.
 
 ## Data Access
 

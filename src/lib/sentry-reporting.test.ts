@@ -6,9 +6,12 @@ import {
 	dispatchContentScriptError,
 	forwardContentScriptErrorMessage,
 	isSentryErrorMessage,
+	MAX_SENTRY_BREADCRUMBS,
+	recordSentryBreadcrumb,
 	reportErrorToSentry,
 	sanitizeSentryEvent,
 	serializeSentryError,
+	SENTRY_BREADCRUMB_MESSAGES,
 	SENTRY_REPORT_RATE_LIMITS,
 	SENTRY_ERROR_MESSAGE_TYPE
 } from './sentry-reporting';
@@ -72,6 +75,28 @@ describe('Sentry message validation and forwarding', () => {
 				module: 'contains user-provided data'
 			})
 		).toBe(false);
+	});
+
+	it('attaches only bounded FFmpeg breadcrumbs to content-script reports', () => {
+		for (let i = 0; i < MAX_SENTRY_BREADCRUMBS + 2; i += 1) {
+			recordSentryBreadcrumb(SENTRY_BREADCRUMB_MESSAGES[i % SENTRY_BREADCRUMB_MESSAGES.length]);
+		}
+
+		const message = createSentryErrorMessage(new Error('failed'), 'content-script');
+		expect(message.breadcrumbs).toHaveLength(MAX_SENTRY_BREADCRUMBS);
+		expect(message.breadcrumbs?.every((breadcrumb) => breadcrumb.category === 'ffmpeg')).toBe(true);
+		expect(isSentryErrorMessage(message)).toBe(true);
+		expect(isSentryErrorMessage({ ...message, breadcrumbs: [...message.breadcrumbs!, {}] })).toBe(false);
+	});
+
+	it('keeps breadcrumbs queued for content-script reports when creating popup reports', () => {
+		recordSentryBreadcrumb('FFmpeg merge started');
+
+		const popupMessage = createSentryErrorMessage(new Error('failed'), 'extension-popup');
+		expect(popupMessage.breadcrumbs).toBeUndefined();
+
+		const contentScriptMessage = createSentryErrorMessage(new Error('failed'), 'content-script');
+		expect(contentScriptMessage.breadcrumbs?.map((breadcrumb) => breadcrumb.message)).toEqual(['FFmpeg merge started']);
 	});
 
 	it('dispatches page-world errors as a custom event', () => {
@@ -202,7 +227,15 @@ describe('sanitizeSentryEvent', () => {
 			},
 			user: { ip_address: '127.0.0.1' },
 			extra: { videoTitle: 'private title' },
-			breadcrumbs: [{ message: 'visited video' }],
+			breadcrumbs: [
+				{
+					category: 'ffmpeg',
+					message: 'FFmpeg merge started',
+					timestamp: 123,
+					data: { url: 'https://cdn.example/video.m4s' }
+				},
+				{ category: 'navigation', message: 'visited video', timestamp: 124 }
+			],
 			exception: {
 				values: [
 					{
@@ -230,7 +263,7 @@ describe('sanitizeSentryEvent', () => {
 		expect(event.request).toBeUndefined();
 		expect(event.user).toBeUndefined();
 		expect(event.extra).toBeUndefined();
-		expect(event.breadcrumbs).toEqual([]);
+		expect(event.breadcrumbs).toEqual([{ category: 'ffmpeg', message: 'FFmpeg merge started', timestamp: 123 }]);
 		expect(event.message).toContain('[external URL]');
 		expect(event.message).not.toContain('BV123');
 		expect(event.exception.values[0].value).not.toContain('api.bilibili.com');

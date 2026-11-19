@@ -17,13 +17,15 @@ export default defineConfig(({ mode, command }) => {
 	const entryAsset = `./static/${entryName}.js`;
 	const chunkAssets = ['./static/assets/**/*.js', './static/assets/**/*.js.map'];
 	const mapAssets = [`${entryAsset}.map`, './static/assets/**/*.js.map'];
+	const legacySourcemapPaths = [entryAsset, `${entryAsset}.map`, ...(!isSeed && !isWorker ? ['./static/assets'] : [])];
 
 	return {
 		plugins: [
 			...createSentryPlugins(
 				sentryEnabled,
 				[entryAsset, `${entryAsset}.map`, ...chunkAssets],
-				mapAssets
+				mapAssets,
+				legacySourcemapPaths
 			)
 		],
 		resolve: {
