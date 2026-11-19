@@ -124,6 +124,40 @@ describe('fetchStreamThroughExtension', () => {
 		expect(channels).toHaveLength(0);
 	});
 
+	it('rejects a message channel without a usable postMessage method', async () => {
+		vi.stubGlobal(
+			'MessageChannel',
+			class extends FakeMessageChannel {
+				constructor() {
+					super();
+					Object.defineProperty(this.port1, 'postMessage', { value: null });
+					channels.push(this);
+				}
+			}
+		);
+
+		await expect(fetchStreamThroughExtension('https://upos-sz-mirror.bilivideo.com/video.m4s')).rejects.toThrow(
+			'The extension stream message channel is unavailable'
+		);
+		expect(channels[0].port1.closed).toBe(true);
+		expect(channels[0].port2.closed).toBe(true);
+		expect(window.postMessage).not.toHaveBeenCalled();
+	});
+
+	it('reports unavailable page messaging without throwing a null postMessage TypeError', async () => {
+		const descriptor = Object.getOwnPropertyDescriptor(window, 'postMessage');
+		Object.defineProperty(window, 'postMessage', { configurable: true, value: null });
+
+		try {
+			await expect(fetchStreamThroughExtension('https://upos-sz-mirror.bilivideo.com/video.m4s')).rejects.toThrow(
+				'Page messaging is unavailable'
+			);
+			expect(channels[0].port1.closed).toBe(true);
+		} finally {
+			if (descriptor) Object.defineProperty(window, 'postMessage', descriptor);
+		}
+	});
+
 	it('forwards abort signals to the isolated content script', async () => {
 		const abortHandler = vi.fn();
 		vi.mocked(window.postMessage).mockImplementation(((
