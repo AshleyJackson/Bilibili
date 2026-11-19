@@ -11,6 +11,22 @@ function abortError(): DOMException {
 	return new DOMException('The operation was aborted', 'AbortError');
 }
 
+function postMessageToPort(port: MessagePort, message: unknown): void {
+	const postMessage = port?.postMessage;
+	if (typeof postMessage !== 'function') {
+		throw new Error('The extension stream message channel is unavailable');
+	}
+	postMessage.call(port, message);
+}
+
+function postMessageToPage(message: unknown, transfer: Transferable[]): void {
+	const postMessage = window.postMessage;
+	if (typeof postMessage !== 'function') {
+		throw new Error('Page messaging is unavailable');
+	}
+	Reflect.apply(postMessage, window, [message, window.location.origin, transfer]);
+}
+
 /**
  * Request a CDN response through the isolated content script and extension
  * service worker. Page-world fetch is subject to Bilibili's CORS policy.
@@ -23,6 +39,14 @@ export function fetchStreamThroughExtension(url: string, signal?: AbortSignal): 
 
 	return new Promise<Response>((resolve, reject) => {
 		const channel = new MessageChannel();
+		const port = channel.port1;
+		if (!port || typeof port.postMessage !== 'function' || !channel.port2) {
+			channel.port1?.close();
+			channel.port2?.close();
+			reject(new Error('The extension stream message channel is unavailable'));
+			return;
+		}
+
 		let responseReceived = false;
 		let settled = false;
 		let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
@@ -32,14 +56,14 @@ export function fetchStreamThroughExtension(url: string, signal?: AbortSignal): 
 		const cleanup = (): void => {
 			clearTimeout(responseTimer);
 			signal?.removeEventListener('abort', onAbort);
-			channel.port1.onmessage = null;
-			channel.port1.onmessageerror = null;
-			channel.port1.close();
+			port.onmessage = null;
+			port.onmessageerror = null;
+			port.close();
 		};
 
 		const sendAbort = (): void => {
 			try {
-				channel.port1.postMessage({ type: 'abort' });
+				postMessageToPort(port, { type: 'abort' });
 			} catch {
 				// The bridge may already be closed.
 			}
@@ -75,7 +99,7 @@ export function fetchStreamThroughExtension(url: string, signal?: AbortSignal): 
 					const sequence = pendingAcknowledgement;
 					pendingAcknowledgement = undefined;
 					try {
-						channel.port1.postMessage({ type: 'ack', sequence });
+						postMessageToPort(port, { type: 'ack', sequence });
 					} catch (error) {
 						fail(error instanceof Error ? error : new Error(String(error)));
 					}
@@ -94,7 +118,7 @@ export function fetchStreamThroughExtension(url: string, signal?: AbortSignal): 
 			fail(new Error('Timed out waiting for the extension stream worker'));
 		}, RESPONSE_TIMEOUT_MS);
 
-		channel.port1.onmessage = (event: MessageEvent<unknown>): void => {
+		port.onmessage = (event: MessageEvent<unknown>): void => {
 			if (!isPageStreamMessage(event.data)) {
 				fail(new Error('Invalid response from the extension stream worker'));
 				return;
@@ -173,21 +197,20 @@ export function fetchStreamThroughExtension(url: string, signal?: AbortSignal): 
 			fail(new Error(message.message || 'Extension stream request failed'));
 		};
 
-		channel.port1.onmessageerror = (): void => {
+		port.onmessageerror = (): void => {
 			fail(new Error('Could not read a message from the extension stream worker'));
 		};
-		channel.port1.start();
+		port.start();
 		signal?.addEventListener('abort', onAbort, { once: true });
 
 		try {
-			window.postMessage(
+			postMessageToPage(
 				{
 					source: STREAM_FETCH_SOURCE,
 					type: 'request',
 					url,
 					requestType: STREAM_FETCH_REQUEST_TYPE
 				},
-				window.location.origin,
 				[channel.port2]
 			);
 		} catch (error) {
