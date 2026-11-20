@@ -15,6 +15,7 @@ import { fetchUgcPlayUrl, fetchBangumiPlayUrl } from '$lib/bilibili-api';
 import type { PlayUrlResult } from '$lib/bilibili-api';
 import { logInfo, logWarn, logError } from '$lib/logger';
 import { dispatchContentScriptError } from '$lib/sentry-reporting';
+import { parseVideoPageData } from '$lib/video-page';
 
 const MODULE = 'main';
 
@@ -284,10 +285,16 @@ async function processVideoPage(): Promise<void> {
 		return;
 	}
 
-	const data = state.data as {
-		videoData: { aid: number; bvid: string; cid: number; title: string; pages: Array<{ page: number; part: string; cid: number }> };
-	};
-	const videoData = data.videoData;
+	const videoData = parseVideoPageData(state.data);
+	if (!videoData) {
+		logWarn(MODULE, 'processVideoPage: video data missing or invalid');
+		showDownloadInfo({
+			code: ErrorCode.INVALID_RESPONSE,
+			message: '未能获取视频信息，请刷新页面后重试',
+			quality: QUALITY_LABELS[quality] ?? ''
+		});
+		return;
+	}
 	const avid = videoData.aid;
 	const bvid = videoData.bvid;
 	let cid = videoData.cid;
