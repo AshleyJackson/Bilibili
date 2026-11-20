@@ -5,7 +5,8 @@ import {
 	DownloadResultSchema,
 	PlayUrlResponseSchema,
 	SettingsSchema,
-	VideoDataSchema
+	VideoDataSchema,
+	VideoPageDataSchema
 } from './schemas';
 
 const videoData = {
@@ -32,6 +33,12 @@ const stream = {
 describe('VideoDataSchema', () => {
 	it('accepts a complete video response', () => {
 		expect(VideoDataSchema.parse(videoData)).toEqual(videoData);
+	});
+
+	it('validates the video page metadata used by UGC processing', () => {
+		expect(VideoPageDataSchema.safeParse(videoData.videoData).success).toBe(true);
+		expect(VideoPageDataSchema.safeParse(undefined).success).toBe(false);
+		expect(VideoPageDataSchema.safeParse({ ...videoData.videoData, pages: undefined }).success).toBe(false);
 	});
 
 	it('allows empty page lists but requires nested video data', () => {

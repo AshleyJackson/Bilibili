@@ -11,6 +11,20 @@ export const ErrorCode = {
 
 // ── Zod schemas for Bilibili API responses ──
 
+export const VideoPageDataSchema = z.object({
+	aid: z.number(),
+	bvid: z.string(),
+	cid: z.number(),
+	title: z.string(),
+	pages: z.array(
+		z.object({
+			page: z.number(),
+			part: z.string(),
+			cid: z.number()
+		})
+	)
+});
+
 export const VideoDataSchema = z.object({
 	aid: z.number(),
 	bvid: z.string(),
@@ -23,22 +37,11 @@ export const VideoDataSchema = z.object({
 			cid: z.number()
 		})
 	),
-	videoData: z.object({
-		aid: z.number(),
-		bvid: z.string(),
-		cid: z.number(),
-		title: z.string(),
-		pages: z.array(
-			z.object({
-				page: z.number(),
-				part: z.string(),
-				cid: z.number()
-			})
-		)
-	})
+	videoData: VideoPageDataSchema
 });
 
 export type VideoData = z.infer<typeof VideoDataSchema>;
+export type VideoPageData = z.infer<typeof VideoPageDataSchema>;
 
 export const DashStreamSchema = z.object({
 	id: z.number(),

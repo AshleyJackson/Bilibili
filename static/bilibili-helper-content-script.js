@@ -3999,6 +3999,17 @@ var ErrorCode = {
 	VIP_ONLY: -10403,
 	UNKNOWN: -99999
 };
+var VideoPageDataSchema = object({
+	aid: number(),
+	bvid: string(),
+	cid: number(),
+	title: string(),
+	pages: array(object({
+		page: number(),
+		part: string(),
+		cid: number()
+	}))
+});
 object({
 	aid: number(),
 	bvid: string(),
@@ -4009,18 +4020,13 @@ object({
 		part: string(),
 		cid: number()
 	})),
-	videoData: object({
-		aid: number(),
-		bvid: string(),
-		cid: number(),
-		title: string(),
-		pages: array(object({
-			page: number(),
-			part: string(),
-			cid: number()
-		}))
-	})
+	videoData: VideoPageDataSchema
 });
+function parseVideoPageData(data) {
+	const state = data;
+	const result = VideoPageDataSchema.safeParse(state?.videoData);
+	return result.success ? result.data : null;
+}
 var DashStreamSchema = object({
 	id: number(),
 	base_url: string().optional(),
@@ -9015,7 +9021,16 @@ async function processVideoPage() {
 		});
 		return;
 	}
-	const videoData = state.data.videoData;
+	const videoData = parseVideoPageData(state.data);
+	if (!videoData) {
+		logWarn(MODULE, "processVideoPage: video data missing or invalid");
+		showDownloadInfo({
+			code: ErrorCode.INVALID_RESPONSE,
+			message: "未能获取视频信息，请刷新页面后重试",
+			quality: QUALITY_LABELS[quality] ?? ""
+		});
+		return;
+	}
 	const avid = videoData.aid;
 	const bvid = videoData.bvid;
 	let cid = videoData.cid;
